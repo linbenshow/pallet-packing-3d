@@ -99,8 +99,8 @@ export const SCENARIO_PRESETS: ScenarioPreset[] = [
   },
   {
     id: 'user-dataset-2',
-    name: '實測組 2 (交貨清單 1900箱)',
-    description: '使用者提供的 14 筆大量交貨訂單（總計 1,900 箱），展示單一棧板最佳分層互鎖裝載與剩餘量統計。',
+    name: '實測組 2 (交貨清單 1920箱)',
+    description: '使用者提供的 14 筆大量交貨訂單（總計 1,920 箱），自動拆板規劃並依板型分組檢視。',
     palletId: 'asia-120x100',
     items: [
       { id: 'u2-01', name: '訂單 #01 (50×34×34)', length: 50, width: 34, height: 34, weight: 16.8, maxLoad: estimateMaxLoad(16.8), quantity: 120, color: '#3b82f6' },

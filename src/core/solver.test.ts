@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EPS, rectsOverlapWithGap } from './physics';
 import { DEFAULT_CONFIG, PALLET_PRESETS, SCENARIO_PRESETS } from './presets';
-import { solvePalletPacking } from './solver';
+import { solveMultiPalletPacking, solvePalletPacking } from './solver';
 
 describe('3D Palletizing Solver', () => {
   it('achieves strong odd/even layer interlocking for single-SKU scenario with decimal cm & gap', () => {
@@ -128,5 +128,19 @@ describe('3D Palletizing Solver', () => {
     expect(result.placedBoxes.length).toBeGreaterThan(10);
     expect(result.metrics.isOverhangFree).toBe(true);
     expect(result.metrics.isLoadSafe).toBe(true);
+  });
+
+  it('auto-splits all 1,920 boxes of user-dataset-2 across multiple pallets safely', () => {
+    const scenario = SCENARIO_PRESETS.find((s) => s.id === 'user-dataset-2')!;
+    const pallet = PALLET_PRESETS.find((p) => p.id === scenario.palletId)!;
+    const config = { ...DEFAULT_CONFIG, ...scenario.configOverride };
+
+    const multi = solveMultiPalletPacking(pallet, scenario.items, config);
+    expect(multi.summary.totalBoxesRequested).toBe(1920);
+    expect(multi.summary.totalBoxesPlaced).toBe(1920);
+    expect(multi.unplacedItems.length).toBe(0);
+    expect(multi.summary.totalPallets).toBeGreaterThan(10);
+    expect(multi.summary.uniquePatterns).toBeLessThan(multi.summary.totalPallets);
+    expect(multi.summary.allPalletsSafe).toBe(true);
   });
 });

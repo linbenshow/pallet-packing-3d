@@ -2,9 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Download,
   Eye,
   Layers,
+  PackageCheck,
   Pause,
   Play,
   Plus,
@@ -25,9 +28,51 @@ import {
   PALLET_PRESETS,
   SCENARIO_PRESETS,
 } from './core/presets';
-import { solvePalletPacking } from './core/solver';
-import type { CargoItem, InterlockStrategy, PackingConfig, PalletSpec } from './core/types';
-import { exportResultToCSV, exportResultToJSON } from './utils/export';
+import { solveMultiPalletPacking } from './core/solver';
+import type {
+  CargoItem,
+  InterlockStrategy,
+  PackingConfig,
+  PackingResult,
+  PalletSpec,
+} from './core/types';
+import {
+  exportMultiPalletToCSV,
+  exportMultiPalletToJSON,
+} from './utils/export';
+
+const EMPTY_RESULT: PackingResult = {
+  placedBoxes: [],
+  unplacedItems: [],
+  layers: [],
+  metrics: {
+    totalBoxesPlaced: 0,
+    totalBoxesRequested: 0,
+    totalWeight: 0,
+    weightUtilization: 0,
+    compactVolumeUtilization: 0,
+    totalVolumeUtilization: 0,
+    usedHeight: 0,
+    cog: { x: 0, y: 0, z: 0 },
+    cogOffset: { dx: 0, dy: 0, normX: 0, normY: 0, isBalanced: true },
+    interlockRate: 1,
+    avgSupportRatio: 1,
+    minSupportRatioFound: 1,
+    maxLoadUtilization: 0,
+    isLoadSafe: true,
+    isOverhangFree: true,
+    easeOfStackingScore: 100,
+  },
+};
+
+function formatPalletRange(nums: number[]): string {
+  if (nums.length === 0) return '';
+  if (nums.length === 1) return `#${nums[0]}`;
+  const isContiguous = nums[nums.length - 1] - nums[0] === nums.length - 1;
+  if (isContiguous) return `#${nums[0]}~#${nums[nums.length - 1]}`;
+  if (nums.length <= 3) return nums.map((n) => `#${n}`).join(', ');
+  return `#${nums[0]}..#${nums[nums.length - 1]}`;
+}
 
 export function App() {
   const initialScenario = SCENARIO_PRESETS[0];
@@ -50,6 +95,9 @@ export function App() {
     initialScenario.configOverride?.gapCm ?? DEFAULT_CONFIG.gapCm
   );
 
+  // Active pallet index in multi-pallet mode (0-based)
+  const [activePalletIdx, setActivePalletIdx] = useState<number>(0);
+
   // Viewport controls
   const [colorMode, setColorMode] = useState<ColorMode>('sku');
   const [showCoG, setShowCoG] = useState<boolean>(true);
@@ -60,28 +108,39 @@ export function App() {
     tick: number;
   }>({ preset: 'iso', tick: 0 });
 
-  // Run solver synchronously via useMemo (fast: < 30ms)
+  // Run multi-pallet solver synchronously via useMemo (fast: < 60ms even for 1,900 boxes)
   const effectiveConfig = useMemo<PackingConfig>(
     () => ({ ...config, gapCm: enableGap ? Math.max(0, savedGapCm) : 0 }),
     [config, enableGap, savedGapCm]
   );
 
-  const result = useMemo(
-    () => solvePalletPacking(pallet, items, effectiveConfig),
+  const multiResult = useMemo(
+    () => solveMultiPalletPacking(pallet, items, effectiveConfig),
     [pallet, items, effectiveConfig]
   );
 
-  // Sequence playback state
+  // Clamp activePalletIdx whenever pallet count changes
+  const safePalletIdx = Math.min(
+    activePalletIdx,
+    Math.max(0, multiResult.pallets.length - 1)
+  );
+  const result = multiResult.pallets[safePalletIdx] ?? EMPTY_RESULT;
+
+  useEffect(() => {
+    setActivePalletIdx(0);
+  }, [multiResult]);
+
+  // Sequence playback state for currently selected pallet
   const totalPlaced = result.placedBoxes.length;
   const [visibleUpToSeq, setVisibleUpToSeq] = useState<number>(totalPlaced);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
 
-  // Reset playback when solution changes
+  // Reset playback when switching pallets or recalculating
   useEffect(() => {
     setVisibleUpToSeq(result.placedBoxes.length);
     setSelectedLayer(null);
     setIsPlaying(false);
-  }, [result]);
+  }, [result, safePalletIdx]);
 
   // Playback timer
   useEffect(() => {
@@ -164,6 +223,8 @@ export function App() {
   };
 
   const { metrics } = result;
+  const { summary } = multiResult;
+  const isMultiPallet = summary.totalPallets > 1;
 
   return (
     <div className="app-shell">
@@ -176,7 +237,7 @@ export function App() {
           <div>
             <h1>3D 棧板智慧裝箱系統</h1>
             <span className="subtitle">
-              奇偶層互鎖 · 重心平衡 · 獨立耐壓保護 · 單位 cm / kg
+              多棧板自動拆板 · 奇偶層互鎖 · 重心平衡 · 獨立耐壓 · cm / kg
             </span>
           </div>
         </div>
@@ -197,15 +258,16 @@ export function App() {
         <div className="export-actions">
           <button
             className="btn-secondary"
-            onClick={() => exportResultToCSV(pallet, result)}
-            disabled={totalPlaced === 0}
+            onClick={() => exportMultiPalletToCSV(pallet, multiResult)}
+            disabled={summary.totalBoxesPlaced === 0}
           >
-            <Download size={14} /> CSV 順序表
+            <Download size={14} />{' '}
+            {isMultiPallet ? `全部 CSV (${summary.totalPallets}板)` : 'CSV 順序表'}
           </button>
           <button
             className="btn-secondary"
-            onClick={() => exportResultToJSON(pallet, effectiveConfig, result)}
-            disabled={totalPlaced === 0}
+            onClick={() => exportMultiPalletToJSON(pallet, effectiveConfig, multiResult)}
+            disabled={summary.totalBoxesPlaced === 0}
           >
             <Download size={14} /> JSON
           </button>
@@ -420,7 +482,7 @@ export function App() {
           <section className="card cargo-card">
             <div className="card-title-row">
               <div className="card-title" style={{ marginBottom: 0 }}>
-                <Box size={15} /> 貨物清單 ({items.length} 品項)
+                <Box size={15} /> 貨物清單 ({items.length} 品項 · {summary.totalBoxesRequested} 箱)
               </div>
               <button className="btn-primary-sm" onClick={addItem}>
                 <Plus size={13} /> 新增品項
@@ -545,7 +607,7 @@ export function App() {
           </section>
         </aside>
 
-        {/* CENTER VIEWPORT: 3D Interactive Scene + Playback */}
+        {/* CENTER VIEWPORT: 3D Interactive Scene + Multi-Pallet Bar + Playback */}
         <section className="viewport-area">
           <div className="viewport-toolbar">
             <div className="btn-group">
@@ -592,6 +654,54 @@ export function App() {
             </div>
           </div>
 
+          {/* Multi-Pallet Fleet Switcher Bar (auto-shown when > 1 pallet) */}
+          {isMultiPallet && (
+            <div className="fleet-bar">
+              <div className="fleet-summary-pill">
+                <PackageCheck size={14} />
+                <span>
+                  自動拆板：共 <strong>{summary.totalPallets}</strong> 板（
+                  {summary.uniquePatterns} 種板型）· 已排{' '}
+                  <strong>{summary.totalBoxesPlaced}</strong> / {summary.totalBoxesRequested} 箱 ·
+                  總重 <strong>{summary.totalWeight.toFixed(1)}</strong> kg
+                </span>
+              </div>
+
+              <div className="fleet-nav">
+                <button
+                  className="icon-btn"
+                  disabled={safePalletIdx <= 0}
+                  onClick={() => setActivePalletIdx((i) => Math.max(0, i - 1))}
+                  title="上一板"
+                >
+                  <ChevronLeft size={15} />
+                </button>
+                <select
+                  className="pallet-select"
+                  value={safePalletIdx}
+                  onChange={(e) => setActivePalletIdx(parseInt(e.target.value, 10))}
+                >
+                  {multiResult.pallets.map((p, idx) => (
+                    <option key={idx} value={idx}>
+                      棧板 #{idx + 1} / {summary.totalPallets}（{p.placedBoxes.length}箱 ·{' '}
+                      {p.metrics.totalWeight.toFixed(1)}kg）
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="icon-btn"
+                  disabled={safePalletIdx >= summary.totalPallets - 1}
+                  onClick={() =>
+                    setActivePalletIdx((i) => Math.min(summary.totalPallets - 1, i + 1))
+                  }
+                  title="下一板"
+                >
+                  <ChevronRight size={15} />
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="viewport-canvas-host">
             <PalletViewer3D
               pallet={pallet}
@@ -629,7 +739,8 @@ export function App() {
                 <RotateCcw size={14} />
               </button>
               <span className="seq-label">
-                順序 <strong>{visibleUpToSeq}</strong> / {totalPlaced}
+                {isMultiPallet ? `板#${safePalletIdx + 1} ` : ''}順序{' '}
+                <strong>{visibleUpToSeq}</strong> / {totalPlaced}
               </span>
               <input
                 type="range"
@@ -674,15 +785,56 @@ export function App() {
           </div>
         </section>
 
-        {/* RIGHT PANEL: Analytics, CoG Radar & Layer Details */}
+        {/* RIGHT PANEL: Fleet Groups, Analytics, CoG Radar & Layer Details */}
         <aside className="panel panel-right">
-          {/* KPI Grid */}
+          {/* Multi-Pallet Template Groups (when > 1 pallet) */}
+          {isMultiPallet && (
+            <section className="card fleet-card">
+              <div className="card-title">
+                <PackageCheck size={15} className="accent-blue" />
+                拆板板型總覽 ({summary.totalPallets} 板 / {summary.uniquePatterns} 種)
+              </div>
+              <div className="template-list">
+                {multiResult.groups.map((grp) => {
+                  const isActiveGroup = grp.palletNumbers.includes(safePalletIdx + 1);
+                  return (
+                    <div
+                      key={grp.groupIndex}
+                      className={`template-row ${isActiveGroup ? 'selected' : ''}`}
+                      onClick={() => setActivePalletIdx(grp.representativePalletIndex)}
+                    >
+                      <div className="template-row-top">
+                        <span className="pill odd">板型 {grp.groupIndex}</span>
+                        <span className="template-range">
+                          {formatPalletRange(grp.palletNumbers)}
+                        </span>
+                        <strong>×{grp.count} 板</strong>
+                      </div>
+                      <div className="template-sku">{grp.skuSummary}</div>
+                      <div className="layer-row-sub">
+                        <span>{grp.boxesPerPallet} 箱/板</span>
+                        <span>{grp.weightPerPallet.toFixed(1)} kg</span>
+                        <span>互鎖 {(grp.interlockRate * 100).toFixed(0)}%</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {/* Current Pallet KPI Grid */}
           <section className="kpi-grid">
             <div className="kpi-card">
-              <span className="kpi-label">裝載箱數</span>
+              <span className="kpi-label">
+                {isMultiPallet ? `棧板 #${safePalletIdx + 1} 箱數` : '裝載箱數'}
+              </span>
               <div className="kpi-value">
                 {metrics.totalBoxesPlaced}
-                <small> / {metrics.totalBoxesRequested}</small>
+                <small>
+                  {' '}
+                  / {isMultiPallet ? summary.totalBoxesRequested : metrics.totalBoxesRequested}
+                </small>
               </div>
             </div>
             <div className="kpi-card">
@@ -701,7 +853,7 @@ export function App() {
               </span>
             </div>
             <div className="kpi-card">
-              <span className="kpi-label">總重 / 承重</span>
+              <span className="kpi-label">本板重量</span>
               <div className="kpi-value">
                 {metrics.totalWeight.toFixed(1)}
                 <small> kg</small>
@@ -720,7 +872,7 @@ export function App() {
               ) : (
                 <ShieldAlert size={15} className="text-warn" />
               )}
-              物理約束與堆疊評估
+              {isMultiPallet ? `棧板 #${safePalletIdx + 1} 物理約束評估` : '物理約束與堆疊評估'}
             </div>
 
             <div className="status-list">
@@ -767,7 +919,6 @@ export function App() {
             <div className="card-title">重心投影與平衡圖 (俯視)</div>
             <div className="cog-diagram-wrap">
               <svg viewBox="0 0 200 160" className="cog-svg">
-                {/* Pallet outline */}
                 <rect
                   x="20"
                   y="15"
@@ -778,10 +929,8 @@ export function App() {
                   stroke="#475569"
                   strokeWidth="1.5"
                 />
-                {/* Crosshairs */}
                 <line x1="100" y1="15" x2="100" y2="145" stroke="#334155" strokeDasharray="3 3" />
                 <line x1="20" y1="80" x2="180" y2="80" stroke="#334155" strokeDasharray="3 3" />
-                {/* Allowed CoG zone */}
                 <rect
                   x={100 - 80 * effectiveConfig.maxCogOffsetRatio}
                   y={80 - 65 * effectiveConfig.maxCogOffsetRatio}
@@ -792,7 +941,6 @@ export function App() {
                   strokeWidth="1.2"
                   strokeDasharray="3 2"
                 />
-                {/* Actual CoG point */}
                 {totalPlaced > 0 && (
                   <circle
                     cx={100 + (metrics.cogOffset.dx / (pallet.length / 2)) * 80}
@@ -806,10 +954,18 @@ export function App() {
               </svg>
               <div className="cog-stats">
                 <span>
-                  偏移 ΔX: <strong>{metrics.cogOffset.dx >= 0 ? '+' : ''}{metrics.cogOffset.dx.toFixed(1)} cm</strong>
+                  偏移 ΔX:{' '}
+                  <strong>
+                    {metrics.cogOffset.dx >= 0 ? '+' : ''}
+                    {metrics.cogOffset.dx.toFixed(1)} cm
+                  </strong>
                 </span>
                 <span>
-                  偏移 ΔY: <strong>{metrics.cogOffset.dy >= 0 ? '+' : ''}{metrics.cogOffset.dy.toFixed(1)} cm</strong>
+                  偏移 ΔY:{' '}
+                  <strong>
+                    {metrics.cogOffset.dy >= 0 ? '+' : ''}
+                    {metrics.cogOffset.dy.toFixed(1)} cm
+                  </strong>
                 </span>
                 <span>
                   重心高 Z: <strong>{metrics.cog.z.toFixed(1)} cm</strong>
@@ -853,14 +1009,15 @@ export function App() {
             </div>
           </section>
 
-          {/* Unplaced Items Notice */}
-          {result.unplacedItems.length > 0 && (
+          {/* Global Unplaced Items Notice */}
+          {multiResult.unplacedItems.length > 0 && (
             <section className="card warn-card">
               <div className="card-title text-warn">
-                <ShieldAlert size={15} /> 未裝載貨物 ({result.unplacedItems.reduce((s, u) => s + u.remaining, 0)} 箱)
+                <ShieldAlert size={15} /> 無法裝載貨物 (
+                {multiResult.unplacedItems.reduce((s, u) => s + u.remaining, 0)} 箱)
               </div>
               <div className="unplaced-list">
-                {result.unplacedItems.map((u) => (
+                {multiResult.unplacedItems.map((u) => (
                   <div key={u.cargoId} className="unplaced-row">
                     <div>
                       <strong>{u.name}</strong> · 剩餘 {u.remaining} 箱
@@ -872,9 +1029,12 @@ export function App() {
             </section>
           )}
 
-          {result.unplacedItems.length === 0 && totalPlaced > 0 && (
+          {multiResult.unplacedItems.length === 0 && summary.totalBoxesPlaced > 0 && (
             <div className="all-placed-banner">
-              <CheckCircle2 size={16} /> 所有指定貨物皆已安全裝載完成！
+              <CheckCircle2 size={16} />
+              {isMultiPallet
+                ? `全部 ${summary.totalBoxesPlaced} 箱已拆分為 ${summary.totalPallets} 板安全裝載完成！`
+                : '所有指定貨物皆已安全裝載完成！'}
             </div>
           )}
         </aside>

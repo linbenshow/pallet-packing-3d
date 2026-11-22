@@ -155,3 +155,36 @@ export interface PackingResult {
   layers: LayerSummary[];
   metrics: PackingMetrics;
 }
+
+export interface PalletTemplateGroup {
+  groupIndex: number;
+  signature: string;
+  palletNumbers: number[]; // 1-based pallet indices sharing this exact layout
+  count: number;
+  representativePalletIndex: number; // 0-based index into MultiPalletResult.pallets
+  skuSummary: string;
+  boxesPerPallet: number;
+  weightPerPallet: number;
+  volumeUtilization: number;
+  interlockRate: number;
+}
+
+export interface MultiPalletSummary {
+  totalPallets: number;
+  uniquePatterns: number;
+  totalBoxesPlaced: number;
+  totalBoxesRequested: number;
+  totalWeight: number;
+  avgCompactVolumeUtilization: number;
+  avgInterlockRate: number;
+  avgEaseOfStackingScore: number;
+  allPalletsSafe: boolean;
+}
+
+export interface MultiPalletResult {
+  pallets: PackingResult[];
+  groups: PalletTemplateGroup[];
+  unplacedItems: UnplacedItem[];
+  summary: MultiPalletSummary;
+}
+
