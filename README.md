@@ -121,6 +121,14 @@ $$(x_A + dx_A + g \le x_B) \lor (x_B + dx_B + g \le x_A) \lor (y_A + dy_A + g \l
 3. 直接將該板型複製 $R$ 板並扣除 $u_k \cdot R$，省去數十次重複的 3D 幾何搜尋。
 4. 最後依各板的 SKU 組成與分層排法產生簽章（Signature），自動彙整為 **拆板板型總覽（`PalletTemplateGroup`）**。
 
+### 3.6 利用率門檻與不裝貨決策（Minimum Utilization Gate）
+實務倉儲出貨時，若最後一塊尾板（或小量訂單）裝載率過低，強行派板會造成運費與棧板浪費。系統提供「**未達利用率門檻則不裝貨**」開關，以 **綜合利用率** 作為派板門檻：
+
+$$U_{\text{eff}} = \max\!\left(\frac{\sum V_{\text{box}}}{L \cdot W \cdot H_{\max}},\; \frac{\sum w_{\text{box}}}{W_{\max}}\right)$$
+
+- 同時兼顧「拋貨（體積先滿）」與「重貨（重量先滿）」情境：只要體積率或承重率任一項達標即正常派板。
+- 當 $U_{\text{eff}} < \text{minUtilizationRatio}$ 時，系統自動選擇**不裝貨／不派板**，並將剩餘品項列於「保留未裝貨清單」與顯示預估利用率明細。
+
 ---
 
 ## 4. 內建實測資料與驗證結果

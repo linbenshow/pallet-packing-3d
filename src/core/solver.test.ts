@@ -143,4 +143,61 @@ describe('3D Palletizing Solver', () => {
     expect(multi.summary.uniquePatterns).toBeLessThan(multi.summary.totalPallets);
     expect(multi.summary.allPalletsSafe).toBe(true);
   });
+
+  it('skips loading when pallet utilization falls below minUtilizationRatio', () => {
+    const pallet = PALLET_PRESETS[0]; // 120 x 100 x 150 cm, 1000 kg
+    const tinyOrder = [
+      {
+        id: 'tiny-1',
+        name: '少量小箱',
+        length: 30,
+        width: 20,
+        height: 20,
+        weight: 5,
+        maxLoad: 50,
+        quantity: 3,
+        color: '#3b82f6',
+      },
+    ];
+    const config = {
+      ...DEFAULT_CONFIG,
+      enableMinUtilization: true,
+      minUtilizationRatio: 0.5,
+    };
+
+    const multi = solveMultiPalletPacking(pallet, tinyOrder, config);
+    expect(multi.pallets.length).toBe(0);
+    expect(multi.summary.totalBoxesPlaced).toBe(0);
+    expect(multi.unplacedItems.length).toBe(1);
+    expect(multi.unplacedItems[0].remaining).toBe(3);
+    expect(multi.summary.skippedLowUtilization).toBeDefined();
+    expect(multi.summary.skippedLowUtilization!.effectiveUtilization).toBeLessThan(0.5);
+  });
+
+  it('dispatches a heavy low-volume pallet if weight utilization meets minUtilizationRatio', () => {
+    const pallet = PALLET_PRESETS[0]; // 1000 kg maxWeight
+    const heavyOrder = [
+      {
+        id: 'steel-1',
+        name: '重型鋼件',
+        length: 50,
+        width: 40,
+        height: 20,
+        weight: 200,
+        maxLoad: 500,
+        quantity: 4, // 800 kg = 80% weight utilization, even though volume is ~9%
+        color: '#0ea5e9',
+      },
+    ];
+    const config = {
+      ...DEFAULT_CONFIG,
+      enableMinUtilization: true,
+      minUtilizationRatio: 0.6,
+    };
+
+    const multi = solveMultiPalletPacking(pallet, heavyOrder, config);
+    expect(multi.pallets.length).toBe(1);
+    expect(multi.summary.totalBoxesPlaced).toBe(4);
+    expect(multi.summary.skippedLowUtilization).toBeUndefined();
+  });
 });

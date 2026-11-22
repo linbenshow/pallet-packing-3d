@@ -758,6 +758,7 @@ export function solveMultiPalletPacking(
   }
 
   const pallets: PackingResult[] = [];
+  let skippedLowUtilization: MultiPalletResult['summary']['skippedLowUtilization'];
 
   while (pallets.length < maxPallets) {
     const activeItems: CargoItem[] = [];
@@ -771,6 +772,24 @@ export function solveMultiPalletPacking(
 
     const single = solvePalletPacking(pallet, activeItems, config);
     if (single.placedBoxes.length === 0) break;
+
+    // Utilization gate: if enabled and BOTH total volume utilization and weight utilization
+    // fall below minUtilizationRatio, choose NOT to load/dispatch this pallet.
+    if (config.enableMinUtilization) {
+      const volUtil = single.metrics.totalVolumeUtilization;
+      const wtUtil = single.metrics.weightUtilization;
+      const effUtil = Math.max(volUtil, wtUtil);
+      if (effUtil + EPS < config.minUtilizationRatio) {
+        skippedLowUtilization = {
+          candidateBoxes: single.placedBoxes.length,
+          effectiveUtilization: effUtil,
+          volumeUtilization: volUtil,
+          weightUtilization: wtUtil,
+          threshold: config.minUtilizationRatio,
+        };
+        break;
+      }
+    }
 
     // Count how many boxes of each SKU were consumed by this pallet
     const usedBySku = new Map<string, number>();
@@ -838,7 +857,7 @@ export function solveMultiPalletPacking(
     }
   });
 
-  // Collect any genuinely unplaceable items (or items left over after hitting maxPallets)
+  // Collect any genuinely unplaceable items or items held back due to low utilization
   const unplacedItems: UnplacedItem[] = [];
   const hitLimit = pallets.length >= maxPallets;
   for (const it of validItems) {
@@ -847,7 +866,9 @@ export function solveMultiPalletPacking(
 
     let reason = hitLimit
       ? `已達單次規劃最大棧板上限 (${maxPallets} 板)`
-      : '單箱尺寸或重量超出空棧板物理限制';
+      : skippedLowUtilization
+        ? `未達最低利用率門檻（預估綜合利用率 ${(skippedLowUtilization.effectiveUtilization * 100).toFixed(1)}% < ${(skippedLowUtilization.threshold * 100).toFixed(0)}%，已選擇不裝貨）`
+        : '單箱尺寸或重量超出空棧板物理限制';
 
     if (
       !(
@@ -907,6 +928,7 @@ export function solveMultiPalletPacking(
       avgInterlockRate,
       avgEaseOfStackingScore,
       allPalletsSafe,
+      skippedLowUtilization,
     },
   };
 }

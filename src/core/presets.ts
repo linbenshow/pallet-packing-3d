@@ -47,6 +47,8 @@ export const DEFAULT_CONFIG: PackingConfig = {
   gapCm: 0.5,
   prioritizeHeavyBottom: true,
   groupSameSku: true,
+  enableMinUtilization: false,
+  minUtilizationRatio: 0.5,
 };
 
 export interface ScenarioPreset {

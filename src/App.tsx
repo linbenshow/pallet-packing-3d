@@ -420,6 +420,41 @@ export function App() {
               )}
             </div>
 
+            {/* Minimum Utilization Gate (Skip Low-Utilization Pallet) */}
+            <div className="util-gate-box">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={config.enableMinUtilization}
+                  onChange={(e) =>
+                    setConfig({ ...config, enableMinUtilization: e.target.checked })
+                  }
+                />
+                <span>未達利用率門檻則不裝貨</span>
+              </label>
+              {config.enableMinUtilization && (
+                <label className="slider-field" style={{ marginTop: 8, marginBottom: 0 }}>
+                  <div className="slider-header">
+                    <span>最低綜合利用率（體積/承重取高）</span>
+                    <strong>{Math.round(config.minUtilizationRatio * 100)}%</strong>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="0.95"
+                    step="0.05"
+                    value={config.minUtilizationRatio}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        minUtilizationRatio: parseFloat(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+              )}
+            </div>
+
             <label className="slider-field">
               <div className="slider-header">
                 <span>最小底面支撐率</span>
@@ -911,6 +946,24 @@ export function App() {
                 <span>堆疊容易度評分</span>
                 <span className="badge info">{metrics.easeOfStackingScore} / 100</span>
               </div>
+              <div className="status-row">
+                <span>整板綜合利用率 (體積/承重)</span>
+                <span
+                  className={`badge ${
+                    !effectiveConfig.enableMinUtilization ||
+                    Math.max(metrics.totalVolumeUtilization, metrics.weightUtilization) >=
+                      effectiveConfig.minUtilizationRatio - 1e-3
+                      ? 'ok'
+                      : 'warn'
+                  }`}
+                >
+                  {(
+                    Math.max(metrics.totalVolumeUtilization, metrics.weightUtilization) *
+                    100
+                  ).toFixed(1)}
+                  %
+                </span>
+              </div>
             </div>
           </section>
 
@@ -1009,11 +1062,35 @@ export function App() {
             </div>
           </section>
 
+          {/* Low-Utilization Skipped Pallet Notice */}
+          {summary.skippedLowUtilization && (
+            <section className="card warn-card">
+              <div className="card-title text-warn">
+                <ShieldAlert size={15} /> 未達利用率門檻 · 已選擇不裝貨
+              </div>
+              <div className="unplaced-row" style={{ marginBottom: 6 }}>
+                <span>
+                  尾板預估綜合利用率僅{' '}
+                  <strong>
+                    {(summary.skippedLowUtilization.effectiveUtilization * 100).toFixed(1)}%
+                  </strong>
+                  （總體積 {(summary.skippedLowUtilization.volumeUtilization * 100).toFixed(1)}% /
+                  承重 {(summary.skippedLowUtilization.weightUtilization * 100).toFixed(1)}%），低於門檻{' '}
+                  <strong>{(summary.skippedLowUtilization.threshold * 100).toFixed(0)}%</strong>。
+                </span>
+                <small>
+                  已自動保留剩餘貨物不派板，避免浪費低利用率棧板空間。
+                </small>
+              </div>
+            </section>
+          )}
+
           {/* Global Unplaced Items Notice */}
           {multiResult.unplacedItems.length > 0 && (
             <section className="card warn-card">
               <div className="card-title text-warn">
-                <ShieldAlert size={15} /> 無法裝載貨物 (
+                <ShieldAlert size={15} />{' '}
+                {summary.skippedLowUtilization ? '保留未裝貨清單' : '無法裝載貨物'} (
                 {multiResult.unplacedItems.reduce((s, u) => s + u.remaining, 0)} 箱)
               </div>
               <div className="unplaced-list">

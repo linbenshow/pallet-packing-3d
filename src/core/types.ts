@@ -49,6 +49,10 @@ export interface PackingConfig {
   prioritizeHeavyBottom: boolean;
   /** Keep identical SKUs grouped together for easier picking & stacking */
   groupSameSku: boolean;
+  /** Skip/reject pallets that fail to meet minUtilizationRatio (choose not to load) */
+  enableMinUtilization: boolean;
+  /** Minimum effective utilization (max of totalVolumeUtilization, weightUtilization) required to dispatch a pallet (0.1 - 0.95) */
+  minUtilizationRatio: number;
 }
 
 export interface Box2D {
@@ -179,6 +183,14 @@ export interface MultiPalletSummary {
   avgInterlockRate: number;
   avgEaseOfStackingScore: number;
   allPalletsSafe: boolean;
+  /** Set when remaining cargo was intentionally not loaded due to falling below minUtilizationRatio */
+  skippedLowUtilization?: {
+    candidateBoxes: number;
+    effectiveUtilization: number;
+    volumeUtilization: number;
+    weightUtilization: number;
+    threshold: number;
+  };
 }
 
 export interface MultiPalletResult {
