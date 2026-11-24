@@ -378,7 +378,7 @@ export function selectBestSingleSkuPair(
 
     // Enforce hard density floor so interlocking strategy never unreasonably destroys fill rate
     const maxSacrifice =
-      priority === 'fill-rate' ? 0.0 : priority === 'interlock' ? 0.15 : 0.05;
+      priority === 'fill-rate' ? 0.0 : priority === 'interlock' ? 0.15 : 0.02;
     if (densityRatio + EPS < 1 - maxSacrifice) return;
 
     const interlockWeight =

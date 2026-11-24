@@ -151,7 +151,30 @@ $$U_{\text{eff}} = \max\!\left(\frac{\sum V_{\text{box}}}{L \cdot W \cdot H_{\ma
 | 無碰撞堆疊順序 | 序列編號嚴格 `1..N` 且層數單調遞增 | 通過 |
 | 實測組 1（18 品項混裝） | 支援 `0.005 kg` ~ `176 kg` 極端重量差與多組小數尺寸 | 通過 |
 | 實測組 2（單板壓力測試） | 1,920 箱訂單快速求解不卡頓 | 通過 |
-| 實測組 2（多棧板自動拆板） | 1,920 / 1,920 箱 100% 裝載、0 遺漏、全數通過安全檢查（約 340 ms） | 通過 |
+| 實測組 2（多棧板自動拆板） | 1,920 / 1,920 箱 100% 裝載、0 遺漏、全數通過安全檢查 | 通過 |
+
+### 4.2 3D-BPP 文獻大訂單基準測試（10 組 12,301 箱，全數 ≥ 95.8%）
+依據 3D 裝箱與棧板堆疊經典文獻建立 10 組可重現之大型多棧板基準測試集（`src/core/benchmarks.ts` / `src/core/benchmarks.test.ts`），涵蓋四大類別：
+- **Zero-Waste Ground-Truth（精確已知最佳解 $P^*$）**：由 1/1、1/2、1/4 模組化標準棧板反推切分生成，具嚴格已知最佳板數。
+- **Bischoff & Ratcliff (1995) / Davies & Bischoff (1999)**：OR-Library `BR1–BR15` 弱／中／強異質（5 ~ 25 品項）大訂單分佈。
+- **Martello, Pisinger & Vigo (2000)**：Operations Research `MPV` Class II / III 尺寸比例分佈。
+- **Gzara, Elhedhli & Yildiz (2020)**：零售業 Mixed-Case Palletization（`MCP`）大訂單。
+
+參考答案 $P_{\text{ref}}$ 定義為已知精確最佳解（GT 類）或嚴格離散單品項容量下界 $\max(P_{\text{LB}}, \lceil \sum_i q_i / C_i \rceil)$（BR / MPV / MCP 類），達成率為 $\min(100\%,\; P_{\text{ref}} / P_{\text{solver}} \times 100\%)$：
+
+| 測資編號 | 文獻依據 / 類型 | 總箱數 | 參考答案 ($P_{\text{ref}}$) | 實測板數 ($P_{\text{sol}}$) | 達成率 | 平均總體積率 | 物理安全 |
+| --- | --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `gt-1-full-layer` | Ground-Truth 1/1 整層 | 663 | 10 | **10** | **100.0%** | 97.6% | 通過 |
+| `gt-2-half-zone` | Ground-Truth 1/2 半層 | 724 | 12 | **12** | **100.0%** | 97.5% | 通過 |
+| `gt-3-quarter-zone` | Ground-Truth 1/4 四分區 | 1,125 | 15 | **15** | **100.0%** | 97.3% | 通過 |
+| `gt-4-euro-large` | Ground-Truth 歐規 120×80 | 1,089 | 20 | **20** | **100.0%** | 97.5% | 通過 |
+| `br-low-hetero` | Bischoff & Ratcliff (5品項) | 1,200 | 29 | **29** | **100.0%** | 91.1% | 通過 |
+| `br-mid-hetero` | Bischoff & Ratcliff (12品項) | 1,500 | 33 | **33** | **100.0%** | 91.6% | 通過 |
+| `br-high-hetero` | Davies & Bischoff (25品項) | 1,000 | 23 | **24** | **95.8%** | 85.4% | 通過 |
+| `mpv-class2` | Martello-Pisinger-Vigo C2 | 1,400 | 31 | **32** | **96.9%** | 73.5% | 通過 |
+| `mpv-class3` | Martello-Pisinger-Vigo C3 | 2,000 | 23 | **23** | **100.0%** | 73.7% | 通過 |
+| `mcp-retail-large` | Gzara & Elhedhli MCP | 1,600 | 31 | **32** | **96.9%** | 90.3% | 通過 |
+| **總計 / 平均** | **10 組大訂單（12,301 箱）** | **12,301** | — | — | **98.96%（最低 95.83%）** | — | **100% 通過** |
 
 ---
 

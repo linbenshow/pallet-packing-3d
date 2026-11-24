@@ -28,6 +28,7 @@ import {
   PALLET_PRESETS,
   SCENARIO_PRESETS,
 } from './core/presets';
+import { generateBenchmarkSuite } from './core/benchmarks';
 import { solveMultiPalletPacking } from './core/solver';
 import type {
   CargoItem,
@@ -81,7 +82,9 @@ export function App() {
   const initialPallet =
     PALLET_PRESETS.find((p) => p.id === initialScenario.palletId) ?? PALLET_PRESETS[0];
 
+  const benchmarkSuite = useMemo(() => generateBenchmarkSuite(), []);
   const [activeScenarioId, setActiveScenarioId] = useState<string>(initialScenario.id);
+  const [activeBenchmarkRefPallets, setActiveBenchmarkRefPallets] = useState<number | null>(null);
   const [pallet, setPallet] = useState<PalletSpec>({ ...initialPallet });
   const [items, setItems] = useState<CargoItem[]>(
     initialScenario.items.map((it) => ({ ...it }))
@@ -168,12 +171,25 @@ export function App() {
     if (!sc) return;
     const p = PALLET_PRESETS.find((pp) => pp.id === sc.palletId) ?? PALLET_PRESETS[0];
     setActiveScenarioId(sc.id);
+    setActiveBenchmarkRefPallets(null);
     setPallet({ ...p });
     setItems(sc.items.map((it) => ({ ...it })));
     const nextCfg = { ...DEFAULT_CONFIG, ...sc.configOverride };
     setConfig(nextCfg);
     setEnableGap(nextCfg.gapCm > 0);
     setSavedGapCm(nextCfg.gapCm > 0 ? nextCfg.gapCm : 0.5);
+  };
+
+  const applyBenchmark = (benchId: string) => {
+    const b = benchmarkSuite.find((x) => x.id === benchId);
+    if (!b) return;
+    setActiveScenarioId(`bench:${b.id}`);
+    setActiveBenchmarkRefPallets(b.referencePallets);
+    setPallet({ ...b.pallet });
+    setItems(b.items.map((it) => ({ ...it })));
+    setConfig({ ...b.config });
+    setEnableGap(b.config.gapCm > 0);
+    setSavedGapCm(b.config.gapCm > 0 ? b.config.gapCm : 0.5);
   };
 
   const handlePalletPresetChange = (id: string) => {
@@ -255,6 +271,21 @@ export function App() {
               {sc.name}
             </button>
           ))}
+          <select
+            className="pallet-select"
+            value={activeScenarioId.startsWith('bench:') ? activeScenarioId.slice(6) : ''}
+            onChange={(e) => {
+              if (e.target.value) applyBenchmark(e.target.value);
+            }}
+            title="載入依據 3D-BPP 文獻生成之大訂單基準測資"
+          >
+            <option value="">文獻大訂單測資 (10組)...</option>
+            {benchmarkSuite.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name} (參考 {b.referencePallets}板)
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="export-actions">
@@ -391,7 +422,7 @@ export function App() {
                   })
                 }
               >
-                <option value="balanced">均衡模式（預設，互鎖最多折讓 5% 箱數）</option>
+                <option value="balanced">均衡模式（預設，互鎖最多折讓 2% 箱數）</option>
                 <option value="fill-rate">填充率優先（絕不犧牲單層箱數）</option>
                 <option value="interlock">互鎖穩定優先（最高容許折讓 15%）</option>
               </select>
@@ -734,9 +765,23 @@ export function App() {
                 <PackageCheck size={14} />
                 <span>
                   自動拆板：共 <strong>{summary.totalPallets}</strong> 板（
-                  {summary.uniquePatterns} 種板型）· 已排{' '}
-                  <strong>{summary.totalBoxesPlaced}</strong> / {summary.totalBoxesRequested} 箱 ·
-                  總重 <strong>{summary.totalWeight.toFixed(1)}</strong> kg
+                  {summary.uniquePatterns} 種板型）
+                  {activeBenchmarkRefPallets !== null && (
+                    <>
+                      {' '}· 參考答案 <strong>{activeBenchmarkRefPallets}</strong> 板（達成率{' '}
+                      <strong>
+                        {Math.min(
+                          100,
+                          (activeBenchmarkRefPallets / Math.max(1, summary.totalPallets)) * 100
+                        ).toFixed(1)}
+                        %
+                      </strong>
+                      ）
+                    </>
+                  )}
+                  · 已排 <strong>{summary.totalBoxesPlaced}</strong> /{' '}
+                  {summary.totalBoxesRequested} 箱 · 總重{' '}
+                  <strong>{summary.totalWeight.toFixed(1)}</strong> kg
                 </span>
               </div>
 

@@ -145,7 +145,7 @@ function generateZoneCandidatePoints(
   xArr.sort((a, b) => (reverseX ? b - a : a - b));
   yArr.sort((a, b) => (reverseY ? b - a : a - b));
 
-  const maxCoords = 16;
+  const maxCoords = 22;
   const trimmedX = xArr.slice(0, maxCoords);
   const trimmedY = yArr.slice(0, maxCoords);
 
@@ -215,9 +215,10 @@ function packMixedZoneLayer(
     return b.item.height - a.item.height;
   });
 
-  // Two-tier pool:
+  // Three-tier pool:
   // Tier 1: exact / close height to anchorHeight (for clean flat top)
-  // Tier 2: shorter items that can fill leftover floor space without raising layerHeight!
+  // Tier 2: shorter items that fill leftover floor space without raising layerHeight
+  // Tier 3: taller items that still fit under pallet.maxHeight (safe because zone tracks per-box zLevels!)
   const anchorHeight = ranked[0].item.height;
   const heightTolerance = Math.max(2, anchorHeight * 0.15);
 
@@ -226,6 +227,9 @@ function packMixedZoneLayer(
   );
   const secondaryPool = ranked.filter(
     (s) => s.item.height < anchorHeight - heightTolerance
+  );
+  const tertiaryPool = ranked.filter(
+    (s) => s.item.height > anchorHeight + heightTolerance
   );
 
   primaryPool.sort((a, b) => {
@@ -240,7 +244,7 @@ function packMixedZoneLayer(
     return b.item.length * b.item.width - a.item.length * a.item.width;
   });
 
-  const orderedPool = [...primaryPool, ...secondaryPool];
+  const orderedPool = [...primaryPool, ...secondaryPool, ...tertiaryPool];
 
   const reverseX = config.enableInterlocking && parity === 'even';
   const reverseY =
@@ -536,6 +540,7 @@ function solvePalletWithZoneLayout(
     zLevels: number[];
     triedZ: Set<number>;
     layerIndex: number;
+    preferredCargoId: string | null;
     done: boolean;
   }
 
@@ -544,6 +549,7 @@ function solvePalletWithZoneLayout(
     zLevels: [0],
     triedZ: new Set<number>(),
     layerIndex: 1,
+    preferredCargoId: null,
     done: false,
   }));
 
@@ -582,7 +588,14 @@ function solvePalletWithZoneLayout(
       .filter((entry): entry is { zs: ZoneState; nextZ: number } => entry.nextZ !== null);
     if (activeZones.length === 0) break;
 
+    // In multi-zone mode (1/2 or 1/4), fill each zone vertically before moving to the next
+    // so each zone forms a clean, height-consistent column without smearing one SKU across all zones.
     activeZones.sort((a, b) => {
+      if (!isFullPallet) {
+        const aStarted = a.zs.preferredCargoId !== null ? 0 : 1;
+        const bStarted = b.zs.preferredCargoId !== null ? 0 : 1;
+        if (aStarted !== bStarted) return aStarted - bStarted;
+      }
       if (Math.abs(a.nextZ - b.nextZ) > 0.5) return a.nextZ - b.nextZ;
       return b.zs.zone.dx * b.zs.zone.dy - a.zs.zone.dx * a.zs.zone.dy;
     });
@@ -608,6 +621,12 @@ function solvePalletWithZoneLayout(
     }
 
     const sortedActive = [...zoneFittingSkus].sort((a, b) => {
+      // Keep stacking the zone's preferred SKU vertically for maximum height utilization & SKU grouping
+      if (zs.preferredCargoId) {
+        const aPref = a.item.id === zs.preferredCargoId ? 1 : 0;
+        const bPref = b.item.id === zs.preferredCargoId ? 1 : 0;
+        if (aPref !== bPref) return bPref - aPref;
+      }
       if (config.prioritizeHeavyBottom) {
         const sturdA = a.item.maxLoad * 1.5 + a.item.weight * 2;
         const sturdB = b.item.maxLoad * 1.5 + b.item.weight * 2;
@@ -747,6 +766,9 @@ function solvePalletWithZoneLayout(
     }
 
     placedBoxes.push(...builtLayerBoxes);
+    if (!zs.preferredCargoId && builtLayerBoxes.length > 0) {
+      zs.preferredCargoId = builtLayerBoxes[0].cargoId;
+    }
     const layerWeight = builtLayerBoxes.reduce((s, b) => s + b.weight, 0);
     currentWeight += layerWeight;
 
@@ -908,11 +930,11 @@ export function solvePalletPacking(
     fullRes.metrics.weightUtilization
   );
 
-  // Fast path: single SKU or already >= 78% full or placed 100% of items cleanly
+  // Fast path: single SKU or already >= 92% full or placed 100% of items cleanly
   if (
     activeCount <= 1 ||
-    fullEffUtil >= 0.78 ||
-    (fullRes.unplacedItems.length === 0 && fullRes.metrics.compactVolumeUtilization >= 0.65)
+    fullEffUtil >= 0.92 ||
+    (fullRes.unplacedItems.length === 0 && fullRes.metrics.compactVolumeUtilization >= 0.85)
   ) {
     return fullRes;
   }
