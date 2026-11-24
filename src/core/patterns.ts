@@ -1,5 +1,5 @@
 import { EPS, rectOverlapArea } from './physics';
-import type { Box2D, InterlockStrategy } from './types';
+import type { Box2D, InterlockStrategy, OptimizationPriority } from './types';
 
 export interface LayerPattern {
   name: string;
@@ -320,7 +320,8 @@ export function selectBestSingleSkuPair(
   gap: number,
   minSupportRatio: number,
   enableInterlocking: boolean,
-  strategy: InterlockStrategy
+  strategy: InterlockStrategy,
+  priority: OptimizationPriority = 'balanced'
 ): InterlockingPatternPair | null {
   const candidates = generateSingleSkuPatterns(L, W, l, w, gap);
   if (candidates.length === 0) return null;
@@ -373,13 +374,16 @@ export function selectBestSingleSkuPair(
 
     const avgCount = (odd.boxes.length + even.boxes.length) / 2;
     const interlock = (oddToEven.interlockRatio + evenToOdd.interlockRatio) / 2;
-
-    // Composite score: prioritize packing density (avgCount / maxCount),
-    // but give a strong bonus for interlocking (up to +0.22 so a slightly lower
-    // count or equal-count interlocking pattern beats 0% column stacking).
     const densityRatio = avgCount / Math.max(1, maxCount);
-    // Do not sacrifice more than ~12% box count just for interlocking
-    const score = densityRatio * 100 + interlock * 22 + minSup * 5;
+
+    // Enforce hard density floor so interlocking strategy never unreasonably destroys fill rate
+    const maxSacrifice =
+      priority === 'fill-rate' ? 0.0 : priority === 'interlock' ? 0.15 : 0.05;
+    if (densityRatio + EPS < 1 - maxSacrifice) return;
+
+    const interlockWeight =
+      priority === 'fill-rate' ? 8 : priority === 'interlock' ? 22 : 12;
+    const score = densityRatio * 100 + interlock * interlockWeight + minSup * 4;
 
     if (score > bestScore) {
       bestScore = score;

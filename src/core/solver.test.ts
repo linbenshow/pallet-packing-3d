@@ -200,4 +200,29 @@ describe('3D Palletizing Solver', () => {
     expect(multi.summary.totalBoxesPlaced).toBe(4);
     expect(multi.summary.skippedLowUtilization).toBeUndefined();
   });
+
+  it('packs all 18 heterogeneous boxes of user-dataset-1 onto 1 single pallet', () => {
+    const scenario = SCENARIO_PRESETS.find((s) => s.id === 'user-dataset-1')!;
+    const pallet = PALLET_PRESETS.find((p) => p.id === scenario.palletId)!;
+    const config = { ...DEFAULT_CONFIG, ...scenario.configOverride };
+
+    const multi = solveMultiPalletPacking(pallet, scenario.items, config);
+    expect(multi.pallets.length).toBe(1);
+    expect(multi.summary.totalBoxesPlaced).toBe(18);
+    expect(multi.summary.allPalletsSafe).toBe(true);
+  });
+
+  it('supports explicit 1/2 half-zone and 1/4 quarter-zone partitioning safely', () => {
+    const scenario = SCENARIO_PRESETS.find((s) => s.id === 'mixed-heavy-light')!;
+    const pallet = PALLET_PRESETS.find((p) => p.id === scenario.palletId)!;
+
+    for (const zm of ['half', 'quarter'] as const) {
+      const config = { ...DEFAULT_CONFIG, ...scenario.configOverride, zoneMode: zm };
+      const res = solvePalletPacking(pallet, scenario.items, config);
+      expect(res.placedBoxes.length).toBeGreaterThan(20);
+      expect(res.zones!.length).toBeGreaterThanOrEqual(2);
+      expect(res.metrics.isOverhangFree).toBe(true);
+      expect(res.metrics.isLoadSafe).toBe(true);
+    }
+  });
 });

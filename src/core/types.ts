@@ -34,6 +34,10 @@ export interface CargoItem {
 
 export type InterlockStrategy = 'auto' | 'mirror-x' | 'mirror-y' | 'rotate-180';
 
+export type ZoneMode = 'auto' | 'full' | 'half' | 'quarter';
+
+export type OptimizationPriority = 'balanced' | 'fill-rate' | 'interlock';
+
 export interface PackingConfig {
   /** Minimum bottom surface area ratio that must be supported (0.5 - 1.0) */
   minSupportRatio: number;
@@ -53,6 +57,10 @@ export interface PackingConfig {
   enableMinUtilization: boolean;
   /** Minimum effective utilization (max of totalVolumeUtilization, weightUtilization) required to dispatch a pallet (0.1 - 0.95) */
   minUtilizationRatio: number;
+  /** Modular layer zone partitioning mode: auto, 1/1 full, 1/2 half, or 1/4 quarter */
+  zoneMode: ZoneMode;
+  /** Balance between maximizing fill rate vs prioritizing interlocking patterns */
+  optimizationPriority: OptimizationPriority;
 }
 
 export interface Box2D {
@@ -87,6 +95,8 @@ export interface PlacedBox {
   layerIndex: number;
   layerParity: 'odd' | 'even';
   layerPattern: string;
+  /** Modular zone label (e.g. '1/1 整層', '1/2-A', '1/4-Q1') */
+  zoneLabel?: string;
   /** 1-based collision-free stacking order */
   sequence: number;
   /** Fraction of bottom face supported by lower boxes or pallet deck (0..1) */
@@ -153,11 +163,23 @@ export interface PackingMetrics {
   easeOfStackingScore: number;
 }
 
+export interface ZoneRect {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  dx: number;
+  dy: number;
+}
+
 export interface PackingResult {
   placedBoxes: PlacedBox[];
   unplacedItems: UnplacedItem[];
   layers: LayerSummary[];
   metrics: PackingMetrics;
+  /** Modular zone layout used for this pallet (1/1, 1/2, 1/2+1/4, or 1/4) */
+  zoneLayoutName?: string;
+  zones?: ZoneRect[];
 }
 
 export interface PalletTemplateGroup {

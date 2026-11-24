@@ -22,7 +22,9 @@ import type {
   PalletTemplateGroup,
   PlacedBox,
   UnplacedItem,
+  ZoneRect,
 } from './types';
+import { buildZoneLayouts, type ZoneLayoutSpec } from './zones';
 
 interface RemainingSku {
   item: CargoItem;
@@ -35,17 +37,18 @@ function round4(n: number): number {
 
 /**
  * Sorts boxes within a partial pattern so that if we don't have enough boxes
- * to fill the whole layer, we pick a symmetrical subset centered on the pallet
+ * to fill the whole layer, we pick a symmetrical subset centered on the zone
  * to preserve CoG balance.
  */
 function selectBalancedSubset(
   patternBoxes: Box2D[],
   count: number,
-  pallet: PalletSpec
+  zoneW: number,
+  zoneD: number
 ): Box2D[] {
   if (count >= patternBoxes.length) return patternBoxes;
-  const cx = pallet.length / 2;
-  const cy = pallet.width / 2;
+  const cx = zoneW / 2;
+  const cy = zoneD / 2;
 
   const remaining = [...patternBoxes];
   const selected: Box2D[] = [];
@@ -62,7 +65,6 @@ function selectBalancedSubset(
       const by = b.y + b.dy / 2;
       const newCx = (sumX + bx) / (selected.length + 1);
       const newCy = (sumY + by) / (selected.length + 1);
-      // Combine resulting CoG distance to center + individual distance to center
       const cogDist = Math.hypot(newCx - cx, newCy - cy);
       const selfDist = Math.hypot(bx - cx, by - cy);
       const score = cogDist * 3 + selfDist * 0.5;
@@ -82,84 +84,88 @@ function selectBalancedSubset(
 }
 
 /**
- * Generates candidate (x, y) placement points on the pallet at elevation `z`
- * considering existing boxes in the current layer and lower-layer edges for interlocking.
+ * Generates candidate (x, y) placement points inside a zone [zone.x, zone.x + zone.dx]
+ * x [zone.y, zone.y + zone.dy] at elevation `z`.
  */
-function generateCandidatePoints(
+function generateZoneCandidatePoints(
+  zone: ZoneRect,
   currentLayerBoxes: PlacedBox[],
   lowerLayerBoxes: PlacedBox[],
-  pallet: PalletSpec,
   dx: number,
   dy: number,
   gap: number,
   reverseX: boolean,
   reverseY: boolean
 ): { x: number; y: number }[] {
-  const xs = new Set<number>([0, round4(Math.max(0, pallet.length - dx))]);
-  const ys = new Set<number>([0, round4(Math.max(0, pallet.width - dy))]);
+  const minX = zone.x;
+  const minY = zone.y;
+  const maxX = zone.x + zone.dx;
+  const maxY = zone.y + zone.dy;
 
-  // Center coordinates for balanced placement
-  if (pallet.length >= dx) xs.add(round4((pallet.length - dx) / 2));
-  if (pallet.width >= dy) ys.add(round4((pallet.width - dy) / 2));
+  const xs = new Set<number>([round4(minX), round4(Math.max(minX, maxX - dx))]);
+  const ys = new Set<number>([round4(minY), round4(Math.max(minY, maxY - dy))]);
 
-  // Extreme points from boxes already in the current layer
+  // Extreme points from boxes already in the current layer inside this zone
   for (const b of currentLayerBoxes) {
     const right = round4(b.x + b.dx + gap);
-    if (right + dx <= pallet.length + EPS) xs.add(right);
+    if (right + dx <= maxX + EPS) xs.add(right);
     const left = round4(b.x - gap - dx);
-    if (left >= -EPS) xs.add(Math.max(0, left));
+    if (left >= minX - EPS) xs.add(Math.max(minX, left));
     xs.add(round4(b.x));
 
     const front = round4(b.y + b.dy + gap);
-    if (front + dy <= pallet.width + EPS) ys.add(front);
+    if (front + dy <= maxY + EPS) ys.add(front);
     const back = round4(b.y - gap - dy);
-    if (back >= -EPS) ys.add(Math.max(0, back));
+    if (back >= minY - EPS) ys.add(Math.max(minY, back));
     ys.add(round4(b.y));
   }
 
-  // Also include lower-layer box edges and midpoints to facilitate cross-tie interlocking
+  // Lower-layer box edges and midpoints inside this zone for cross-tie interlocking
   for (const lo of lowerLayerBoxes) {
-    if (lo.x + dx <= pallet.length + EPS) xs.add(round4(lo.x));
+    if (lo.x >= minX - EPS && lo.x + dx <= maxX + EPS) xs.add(round4(lo.x));
     const midX = round4(lo.x + lo.dx / 2);
-    if (midX + dx <= pallet.length + EPS) xs.add(midX);
+    if (midX >= minX - EPS && midX + dx <= maxX + EPS) xs.add(midX);
     const alignRight = round4(lo.x + lo.dx - dx);
-    if (alignRight >= -EPS && alignRight + dx <= pallet.length + EPS) {
-      xs.add(Math.max(0, alignRight));
+    if (alignRight >= minX - EPS && alignRight + dx <= maxX + EPS) {
+      xs.add(Math.max(minX, alignRight));
     }
 
-    if (lo.y + dy <= pallet.width + EPS) ys.add(round4(lo.y));
+    if (lo.y >= minY - EPS && lo.y + dy <= maxY + EPS) ys.add(round4(lo.y));
     const midY = round4(lo.y + lo.dy / 2);
-    if (midY + dy <= pallet.width + EPS) ys.add(midY);
+    if (midY >= minY - EPS && midY + dy <= maxY + EPS) ys.add(midY);
     const alignFront = round4(lo.y + lo.dy - dy);
-    if (alignFront >= -EPS && alignFront + dy <= pallet.width + EPS) {
-      ys.add(Math.max(0, alignFront));
+    if (alignFront >= minY - EPS && alignFront + dy <= maxY + EPS) {
+      ys.add(Math.max(minY, alignFront));
     }
   }
 
-  const xArr = Array.from(xs).filter((v) => v >= -EPS && v + dx <= pallet.length + EPS);
-  const yArr = Array.from(ys).filter((v) => v >= -EPS && v + dy <= pallet.width + EPS);
+  const xArr = Array.from(xs).filter((v) => v >= minX - EPS && v + dx <= maxX + EPS);
+  const yArr = Array.from(ys).filter((v) => v >= minY - EPS && v + dy <= maxY + EPS);
 
   xArr.sort((a, b) => (reverseX ? b - a : a - b));
   yArr.sort((a, b) => (reverseY ? b - a : a - b));
 
-  // Cap grid size for snappy interactive performance
-  const maxCoords = 18;
+  const maxCoords = 16;
   const trimmedX = xArr.slice(0, maxCoords);
   const trimmedY = yArr.slice(0, maxCoords);
 
   const points: { x: number; y: number }[] = [];
   for (const y of trimmedY) {
     for (const x of trimmedX) {
-      points.push({ x: Math.max(0, x), y: Math.max(0, y) });
+      points.push({ x: Math.max(minX, x), y: Math.max(minY, y) });
     }
   }
   return points;
 }
 
 /**
- * Packs a single mixed (heterogeneous) layer at elevation `z`.
+ * Packs a single mixed (heterogeneous) layer inside `zone` at elevation `z`.
+ * Uses corner-hugging tight packing (avoiding center fragmentation) and allows
+ * shorter compatible items to fill remaining floor area within the zone.
  */
-function packMixedLayer(
+function packMixedZoneLayer(
+  zone: ZoneRect,
+  isFullPalletZone: boolean,
   z: number,
   layerIndex: number,
   parity: 'odd' | 'even',
@@ -172,18 +178,23 @@ function packMixedLayer(
 ): { layerBoxes: PlacedBox[]; layerHeight: number; patternName: string } {
   const g = Math.max(0, config.gapCm);
   const lowerLayerBoxes = allPlaced.filter(
-    (b) => Math.abs(b.z + b.dz - z) <= Z_CONTACT_TOLERANCE
+    (b) =>
+      Math.abs(b.z + b.dz - z) <= Z_CONTACT_TOLERANCE &&
+      b.x + b.dx > zone.x + EPS &&
+      b.x < zone.x + zone.dx - EPS &&
+      b.y + b.dy > zone.y + EPS &&
+      b.y < zone.y + zone.dy - EPS
   );
 
-  // Filter SKUs that can physically fit in height, weight, and footprint
+  // Filter SKUs that can physically fit inside THIS zone, height, and weight
   const eligible = remainingSkus.filter((s) => {
     if (s.remaining <= 0) return false;
     if (z + s.item.height > pallet.maxHeight + EPS) return false;
     if (currentWeight + s.item.weight > pallet.maxWeight + EPS) return false;
     const fitsNormal =
-      s.item.length <= pallet.length + EPS && s.item.width <= pallet.width + EPS;
+      s.item.length <= zone.dx + EPS && s.item.width <= zone.dy + EPS;
     const fitsRot =
-      s.item.width <= pallet.length + EPS && s.item.length <= pallet.width + EPS;
+      s.item.width <= zone.dx + EPS && s.item.length <= zone.dy + EPS;
     return fitsNormal || fitsRot;
   });
 
@@ -191,31 +202,33 @@ function packMixedLayer(
     return { layerBoxes: [], layerHeight: 0, patternName: '' };
   }
 
-  // Sort eligible SKUs:
-  // If prioritizeHeavyBottom: stronger maxLoad & heavier items first;
-  // also prefer items that can form a flat, sturdy base layer.
+  // Sort eligible SKUs: sturdy & heavy first at bottom, then largest footprint
   const ranked = [...eligible].sort((a, b) => {
     if (config.prioritizeHeavyBottom) {
-      // Sturdiness score: load-bearing capacity + weight
       const sturdA = a.item.maxLoad * 1.5 + a.item.weight * 2;
       const sturdB = b.item.maxLoad * 1.5 + b.item.weight * 2;
       if (Math.abs(sturdB - sturdA) > 0.5) return sturdB - sturdA;
     }
-    const volA = a.item.length * a.item.width * a.item.height;
-    const volB = b.item.length * b.item.width * b.item.height;
-    return volB - volA;
+    const areaA = a.item.length * a.item.width;
+    const areaB = b.item.length * b.item.width;
+    if (Math.abs(areaB - areaA) > 1) return areaB - areaA;
+    return b.item.height - a.item.height;
   });
 
-  // Pick anchor height from the top-priority SKU; allow slightly shorter or very close heights
-  // in the same layer (prefer exact height match first for flat layers!)
+  // Two-tier pool:
+  // Tier 1: exact / close height to anchorHeight (for clean flat top)
+  // Tier 2: shorter items that can fill leftover floor space without raising layerHeight!
   const anchorHeight = ranked[0].item.height;
   const heightTolerance = Math.max(2, anchorHeight * 0.15);
 
-  const layerPool = ranked.filter(
+  const primaryPool = ranked.filter(
     (s) => Math.abs(s.item.height - anchorHeight) <= heightTolerance
   );
-  // Sort pool so exact height matches come first, then by sturdiness, keeping same SKU grouped
-  layerPool.sort((a, b) => {
+  const secondaryPool = ranked.filter(
+    (s) => s.item.height < anchorHeight - heightTolerance
+  );
+
+  primaryPool.sort((a, b) => {
     const diffA = Math.abs(a.item.height - anchorHeight);
     const diffB = Math.abs(b.item.height - anchorHeight);
     if (Math.abs(diffA - diffB) > 0.5) return diffA - diffB;
@@ -227,7 +240,8 @@ function packMixedLayer(
     return b.item.length * b.item.width - a.item.length * a.item.width;
   });
 
-  // Even layers flip fill direction when interlocking is enabled to promote cross-ties
+  const orderedPool = [...primaryPool, ...secondaryPool];
+
   const reverseX = config.enableInterlocking && parity === 'even';
   const reverseY =
     config.enableInterlocking &&
@@ -239,181 +253,195 @@ function packMixedLayer(
   const layerBoxes: PlacedBox[] = [];
   let runningWeight = currentWeight;
 
-  // Iterate through SKU pool (placing same SKU contiguously when groupSameSku is true)
-  let progress = true;
-  while (progress) {
-    progress = false;
+  const tryPlaceFromPool = (pool: RemainingSku[]) => {
+    let progress = true;
+    while (progress) {
+      progress = false;
 
-    for (const skuEntry of layerPool) {
-      while (skuEntry.remaining > 0) {
-        const item = skuEntry.item;
-        if (runningWeight + item.weight > pallet.maxWeight + EPS) break;
-        if (z + item.height > pallet.maxHeight + EPS) break;
+      for (const skuEntry of pool) {
+        while (skuEntry.remaining > 0) {
+          const item = skuEntry.item;
+          if (runningWeight + item.weight > pallet.maxWeight + EPS) break;
+          if (z + item.height > pallet.maxHeight + EPS) break;
 
-        const orientations: { dx: number; dy: number; rotated: boolean }[] = [
-          { dx: item.length, dy: item.width, rotated: false },
-        ];
-        if (Math.abs(item.length - item.width) > EPS) {
-          orientations.push({ dx: item.width, dy: item.length, rotated: true });
-        }
-        // On even layers, try rotated orientation first to promote cross-tie interlocking
-        if (config.enableInterlocking && parity === 'even' && orientations.length === 2) {
-          orientations.reverse();
-        }
+          const orientations: { dx: number; dy: number; rotated: boolean }[] = [
+            { dx: item.length, dy: item.width, rotated: false },
+          ];
+          if (Math.abs(item.length - item.width) > EPS) {
+            orientations.push({ dx: item.width, dy: item.length, rotated: true });
+          }
+          if (config.enableInterlocking && parity === 'even' && orientations.length === 2) {
+            orientations.reverse();
+          }
 
-        let bestPlacement: PlacedBox | null = null;
-        let bestScore = -Infinity;
+          let bestPlacement: PlacedBox | null = null;
+          let bestScore = -Infinity;
 
-        const currentAll = [...allPlaced, ...layerBoxes];
-        const curCog = computeCoG(currentAll, pallet);
-        const totalWBefore = currentAll.reduce((s, b) => s + b.weight, 0);
+          const currentAll = [...allPlaced, ...layerBoxes];
+          const curCog = computeCoG(currentAll, pallet);
+          const totalWBefore = currentAll.reduce((s, b) => s + b.weight, 0);
 
-        for (const ori of orientations) {
-          if (ori.dx > pallet.length + EPS || ori.dy > pallet.width + EPS) continue;
+          for (const ori of orientations) {
+            if (ori.dx > zone.dx + EPS || ori.dy > zone.dy + EPS) continue;
 
-          const candidates = generateCandidatePoints(
-            layerBoxes,
-            lowerLayerBoxes,
-            pallet,
-            ori.dx,
-            ori.dy,
-            g,
-            reverseX,
-            reverseY
-          );
-
-          for (const pt of candidates) {
-            const candBox: PlacedBox = {
-              instanceId: 'temp',
-              cargoId: item.id,
-              name: item.name,
-              x: pt.x,
-              y: pt.y,
-              z,
-              dx: ori.dx,
-              dy: ori.dy,
-              dz: item.height,
-              rotated: ori.rotated,
-              weight: item.weight,
-              maxLoad: item.maxLoad,
-              color: item.color,
-              layerIndex,
-              layerParity: parity,
-              layerPattern: '混裝分層 (Mixed)',
-              sequence: 0,
-              supportRatio: 1,
-              supportingBoxIds: [],
-              isInterlocked: false,
-              loadOnTop: 0,
-              loadUtilization: 0,
-            };
-
-            if (!isWithinPallet(candBox, pallet)) continue;
-
-            // Check collision with current layer boxes including gap
-            let collides = false;
-            for (const other of layerBoxes) {
-              if (rectsOverlapWithGap(candBox, other, g)) {
-                collides = true;
-                break;
-              }
-            }
-            if (collides) continue;
-
-            // Evaluate bottom support
-            const sup = evaluateSupport(candBox, allPlaced);
-            if (sup.supportRatio + EPS < config.minSupportRatio) continue;
-
-            // Evaluate load-bearing safety on lower boxes
-            if (z > Z_CONTACT_TOLERANCE) {
-              const safe = checkLoadSafetyWithAddition(allPlaced, [
-                ...layerBoxes,
-                candBox,
-              ]);
-              if (!safe) continue;
-            }
-
-            // Score this candidate placement:
-            // 1. Interlocking bonus (if upper layer & enabled)
-            const interlockBonus =
-              config.enableInterlocking && sup.isInterlocked ? 35 : 0;
-
-            // 2. CoG balance (closer to pallet center is better)
-            const newW = totalWBefore + item.weight;
-            const newCogX =
-              (curCog.x * totalWBefore + (pt.x + ori.dx / 2) * item.weight) / newW;
-            const newCogY =
-              (curCog.y * totalWBefore + (pt.y + ori.dy / 2) * item.weight) / newW;
-            const cogNorm = Math.hypot(
-              (newCogX - pallet.length / 2) / Math.max(1, pallet.length / 2),
-              (newCogY - pallet.width / 2) / Math.max(1, pallet.width / 2)
+            const candidates = generateZoneCandidatePoints(
+              zone,
+              layerBoxes,
+              lowerLayerBoxes,
+              ori.dx,
+              ori.dy,
+              g,
+              reverseX,
+              reverseY
             );
-            const balanceScore = Math.max(0, 30 * (1 - cogNorm));
 
-            // 3. SKU grouping: reward adjacency to same-SKU boxes in this layer
-            let groupingBonus = 0;
-            if (config.groupSameSku) {
-              for (const other of layerBoxes) {
-                if (other.cargoId !== item.id) continue;
-                const distX = Math.max(
-                  0,
-                  Math.max(other.x - (pt.x + ori.dx), pt.x - (other.x + other.dx))
-                );
-                const distY = Math.max(
-                  0,
-                  Math.max(other.y - (pt.y + ori.dy), pt.y - (other.y + other.dy))
-                );
-                if (distX <= g + 1 && distY <= g + 1) {
-                  groupingBonus += 12;
+            for (const pt of candidates) {
+              const candBox: PlacedBox = {
+                instanceId: 'temp',
+                cargoId: item.id,
+                name: item.name,
+                x: pt.x,
+                y: pt.y,
+                z,
+                dx: ori.dx,
+                dy: ori.dy,
+                dz: item.height,
+                rotated: ori.rotated,
+                weight: item.weight,
+                maxLoad: item.maxLoad,
+                color: item.color,
+                layerIndex,
+                layerParity: parity,
+                layerPattern: '混裝分層 (Mixed)',
+                zoneLabel: zone.label,
+                sequence: 0,
+                supportRatio: 1,
+                supportingBoxIds: [],
+                isInterlocked: false,
+                loadOnTop: 0,
+                loadUtilization: 0,
+              };
+
+              if (!isWithinPallet(candBox, pallet)) continue;
+              if (
+                candBox.x + candBox.dx > zone.x + zone.dx + EPS ||
+                candBox.y + candBox.dy > zone.y + zone.dy + EPS
+              ) {
+                continue;
+              }
+
+              // Check 3D collision with all already-placed boxes (including current layer)
+              // whose vertical span intersects [z, z + candBox.dz]
+              let collides = false;
+              for (const other of currentAll) {
+                if (
+                  other.z + other.dz <= z + EPS ||
+                  z + candBox.dz <= other.z + EPS
+                ) {
+                  continue;
+                }
+                if (rectsOverlapWithGap(candBox, other, g)) {
+                  collides = true;
                   break;
                 }
               }
-            }
+              if (collides) continue;
 
-            // 4. Compactness / corner hugging (avoid pockets)
-            const targetX = reverseX ? pallet.length - (pt.x + ori.dx) : pt.x;
-            const targetY = reverseY ? pallet.width - (pt.y + ori.dy) : pt.y;
-            const cornerScore =
-              20 *
-              (1 -
-                (targetX / Math.max(1, pallet.length) +
-                  targetY / Math.max(1, pallet.width)) /
-                  2);
+              // Evaluate bottom support
+              const sup = evaluateSupport(candBox, allPlaced);
+              if (sup.supportRatio + EPS < config.minSupportRatio) continue;
 
-            // 5. Higher support ratio bonus
-            const supportBonus = sup.supportRatio * 15;
+              // Evaluate load-bearing safety on lower boxes
+              if (z > Z_CONTACT_TOLERANCE) {
+                const safe = checkLoadSafetyWithAddition(allPlaced, [
+                  ...layerBoxes,
+                  candBox,
+                ]);
+                if (!safe) continue;
+              }
 
-            const totalScore =
-              interlockBonus +
-              balanceScore +
-              groupingBonus +
-              cornerScore +
-              supportBonus;
+              // Tight corner-first scoring (prevents fragmenting the floor by dropping boxes in the middle!)
+              const relX = (pt.x - zone.x) / Math.max(1, zone.dx);
+              const relY = (pt.y - zone.y) / Math.max(1, zone.dy);
+              const targetX = reverseX ? 1 - (relX + ori.dx / Math.max(1, zone.dx)) : relX;
+              const targetY = reverseY ? 1 - (relY + ori.dy / Math.max(1, zone.dy)) : relY;
+              const cornerScore = 38 * (1 - (targetX * 0.45 + targetY * 0.55));
 
-            if (totalScore > bestScore) {
-              bestScore = totalScore;
-              bestPlacement = candBox;
+              // Interlocking bonus (weighted by optimizationPriority)
+              const interlockMult =
+                config.optimizationPriority === 'fill-rate'
+                  ? 12
+                  : config.optimizationPriority === 'interlock'
+                    ? 32
+                    : 20;
+              const interlockBonus =
+                config.enableInterlocking && sup.isInterlocked ? interlockMult : 0;
+
+              // Gentle CoG balance nudge (kept modest so it doesn't fragment 2D packing)
+              const newW = totalWBefore + item.weight;
+              const newCogX =
+                (curCog.x * totalWBefore + (pt.x + ori.dx / 2) * item.weight) / newW;
+              const newCogY =
+                (curCog.y * totalWBefore + (pt.y + ori.dy / 2) * item.weight) / newW;
+              const cogNorm = Math.hypot(
+                (newCogX - pallet.length / 2) / Math.max(1, pallet.length / 2),
+                (newCogY - pallet.width / 2) / Math.max(1, pallet.width / 2)
+              );
+              const balanceScore = Math.max(0, 10 * (1 - cogNorm));
+
+              // SKU grouping bonus
+              let groupingBonus = 0;
+              if (config.groupSameSku) {
+                for (const other of layerBoxes) {
+                  if (other.cargoId !== item.id) continue;
+                  const distX = Math.max(
+                    0,
+                    Math.max(other.x - (pt.x + ori.dx), pt.x - (other.x + other.dx))
+                  );
+                  const distY = Math.max(
+                    0,
+                    Math.max(other.y - (pt.y + ori.dy), pt.y - (other.y + other.dy))
+                  );
+                  if (distX <= g + 1 && distY <= g + 1) {
+                    groupingBonus += 12;
+                    break;
+                  }
+                }
+              }
+
+              const supportBonus = sup.supportRatio * 14;
+              const totalScore =
+                cornerScore +
+                interlockBonus +
+                balanceScore +
+                groupingBonus +
+                supportBonus;
+
+              if (totalScore > bestScore) {
+                bestScore = totalScore;
+                bestPlacement = candBox;
+              }
             }
           }
+
+          if (!bestPlacement) break;
+
+          bestPlacement.instanceId = nextId();
+          layerBoxes.push(bestPlacement);
+          skuEntry.remaining--;
+          runningWeight += item.weight;
+          progress = true;
+
+          if (!config.groupSameSku) break;
         }
-
-        if (!bestPlacement) break;
-
-        bestPlacement.instanceId = nextId();
-        layerBoxes.push(bestPlacement);
-        skuEntry.remaining--;
-        runningWeight += item.weight;
-        progress = true;
-
-        // If groupSameSku is false, allow round-robin across SKUs
-        if (!config.groupSameSku) break;
       }
     }
-  }
+  };
 
-  // If this is the bottom layer (z == 0), center the entire layer footprint on the pallet
-  // to guarantee optimal CoG balance and symmetrical foundation for upper layers!
-  if (z <= Z_CONTACT_TOLERANCE && layerBoxes.length > 0) {
+  tryPlaceFromPool(orderedPool);
+
+  // Center bottom layer ONLY when using full 1/1 zone so multi-zone compartments stay crisp
+  if (isFullPalletZone && z <= Z_CONTACT_TOLERANCE && layerBoxes.length > 0) {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -433,10 +461,11 @@ function packMixedLayer(
   }
 
   const distinctSkus = new Set(layerBoxes.map((b) => b.cargoId)).size;
+  const zonePrefix = isFullPalletZone ? '' : `[${zone.label}] `;
   const patternLabel =
     distinctSkus <= 1
-      ? `單品項補齊 (${parity === 'odd' ? '奇層' : '偶層'})`
-      : `混裝分層 · ${distinctSkus} 品項 (${parity === 'odd' ? '奇層' : '偶層'})`;
+      ? `${zonePrefix}單品項 (${parity === 'odd' ? '奇層' : '偶層'})`
+      : `${zonePrefix}混裝 · ${distinctSkus}品項 (${parity === 'odd' ? '奇層' : '偶層'})`;
 
   for (const b of layerBoxes) {
     b.layerPattern = patternLabel;
@@ -449,14 +478,15 @@ function packMixedLayer(
 }
 
 /**
- * Main 3D Palletizing Solver.
- * Supports both homogeneous single-SKU optimal odd/even interlocking
- * and heterogeneous multi-SKU layer-building with strict physics constraints.
+ * Packs a single pallet using a specific modular zone layout (1/1, 1/2, 1/2+1/4, or 4×1/4).
+ * Each zone independently tracks its elevation Z and odd/even layer parity, while sharing
+ * global remaining inventory, pallet maxWeight, and load-bearing safety.
  */
-export function solvePalletPacking(
+function solvePalletWithZoneLayout(
   pallet: PalletSpec,
   items: CargoItem[],
-  config: PackingConfig
+  config: PackingConfig,
+  layout: ZoneLayoutSpec
 ): PackingResult {
   const validItems = items.filter(
     (it) =>
@@ -466,7 +496,6 @@ export function solvePalletPacking(
       it.height > 0 &&
       it.weight > 0
   );
-
   const totalRequested = validItems.reduce((s, it) => s + it.quantity, 0);
 
   const remainingSkus: RemainingSku[] = validItems.map((item) => ({
@@ -474,32 +503,72 @@ export function solvePalletPacking(
     remaining: item.quantity,
   }));
 
-  // Cache optimal single-SKU odd/even pattern pairs per cargoId
+  const isFullPallet = layout.id === 'full';
+
+  // Cache single-SKU pattern pairs keyed by `${zone.id}:${cargoId}`
   const patternCache = new Map<string, InterlockingPatternPair | null>();
-  const getSingleSkuPair = (item: CargoItem): InterlockingPatternPair | null => {
-    if (!patternCache.has(item.id)) {
+  const getZoneSingleSkuPair = (
+    zone: ZoneRect,
+    item: CargoItem
+  ): InterlockingPatternPair | null => {
+    const key = `${zone.id}:${item.id}`;
+    if (!patternCache.has(key)) {
       patternCache.set(
-        item.id,
+        key,
         selectBestSingleSkuPair(
-          pallet.length,
-          pallet.width,
+          zone.dx,
+          zone.dy,
           item.length,
           item.width,
           config.gapCm,
           config.minSupportRatio,
           config.enableInterlocking,
-          config.interlockStrategy
+          config.interlockStrategy,
+          config.optimizationPriority
         )
       );
     }
-    return patternCache.get(item.id) ?? null;
+    return patternCache.get(key) ?? null;
+  };
+
+  interface ZoneState {
+    zone: ZoneRect;
+    zLevels: number[];
+    triedZ: Set<number>;
+    layerIndex: number;
+    done: boolean;
+  }
+
+  const zoneStates: ZoneState[] = layout.zones.map((zone) => ({
+    zone,
+    zLevels: [0],
+    triedZ: new Set<number>(),
+    layerIndex: 1,
+    done: false,
+  }));
+
+  const getNextZ = (zs: ZoneState): number | null => {
+    zs.zLevels.sort((a, b) => a - b);
+    for (const z of zs.zLevels) {
+      if (z < pallet.maxHeight - EPS && !zs.triedZ.has(z)) {
+        return z;
+      }
+    }
+    return null;
+  };
+
+  const addZLevel = (zs: ZoneState, newZ: number) => {
+    const rz = round4(newZ);
+    if (rz >= pallet.maxHeight - EPS) return;
+    if (!zs.zLevels.some((existing) => Math.abs(existing - rz) <= Z_CONTACT_TOLERANCE)) {
+      zs.zLevels.push(rz);
+    }
   };
 
   const placedBoxes: PlacedBox[] = [];
   const layers: LayerSummary[] = [];
-  let currentZ = 0;
   let currentWeight = 0;
-  let layerIndex = 1;
+  let globalLayerCounter = 1;
   let idCounter = 1;
   const nextId = () => `box-${idCounter++}`;
 
@@ -507,33 +576,57 @@ export function solvePalletPacking(
     const activeSkus = remainingSkus.filter((s) => s.remaining > 0);
     if (activeSkus.length === 0) break;
 
-    const parity: 'odd' | 'even' = layerIndex % 2 === 1 ? 'odd' : 'even';
+    // Pick the active zone with the lowest untried Z level (largest zone first on ties)
+    const activeZones = zoneStates
+      .map((zs) => ({ zs, nextZ: zs.done ? null : getNextZ(zs) }))
+      .filter((entry): entry is { zs: ZoneState; nextZ: number } => entry.nextZ !== null);
+    if (activeZones.length === 0) break;
 
-    // Check if we can build a clean, high-efficiency Single-SKU Interlocking Layer!
-    // Candidate SKUs sorted by sturdiness (heavy & high maxLoad at bottom)
-    const sortedActive = [...activeSkus].sort((a, b) => {
+    activeZones.sort((a, b) => {
+      if (Math.abs(a.nextZ - b.nextZ) > 0.5) return a.nextZ - b.nextZ;
+      return b.zs.zone.dx * b.zs.zone.dy - a.zs.zone.dx * a.zs.zone.dy;
+    });
+
+    const { zs, nextZ: currentZ } = activeZones[0];
+    const { zone } = zs;
+    const parity: 'odd' | 'even' = zs.layerIndex % 2 === 1 ? 'odd' : 'even';
+
+    // Candidate SKUs that physically fit in this zone at currentZ
+    const zoneFittingSkus = activeSkus.filter((s) => {
+      const it = s.item;
+      if (currentZ + it.height > pallet.maxHeight + EPS) return false;
+      if (currentWeight + it.weight > pallet.maxWeight + EPS) return false;
+      return (
+        (it.length <= zone.dx + EPS && it.width <= zone.dy + EPS) ||
+        (it.width <= zone.dx + EPS && it.length <= zone.dy + EPS)
+      );
+    });
+
+    if (zoneFittingSkus.length === 0) {
+      zs.triedZ.add(currentZ);
+      continue;
+    }
+
+    const sortedActive = [...zoneFittingSkus].sort((a, b) => {
       if (config.prioritizeHeavyBottom) {
         const sturdA = a.item.maxLoad * 1.5 + a.item.weight * 2;
         const sturdB = b.item.maxLoad * 1.5 + b.item.weight * 2;
         if (Math.abs(sturdB - sturdA) > 0.5) return sturdB - sturdA;
       }
-      return b.remaining * b.item.length * b.item.width -
-        a.remaining * a.item.length * a.item.width;
+      return (
+        b.remaining * b.item.length * b.item.width -
+        a.remaining * a.item.length * a.item.width
+      );
     });
 
     let builtLayerBoxes: PlacedBox[] = [];
     let builtLayerHeight = 0;
     let builtPatternName = '';
 
-    // Try Single-SKU optimal interlocking layer if:
-    // (a) only 1 active SKU remains, OR
-    // (b) top-priority SKU has enough quantity to fill >= 70% of a full layer
+    // Try Single-SKU optimal interlocking layer for this zone
     for (const candidateSku of sortedActive) {
       const item = candidateSku.item;
-      if (currentZ + item.height > pallet.maxHeight + EPS) continue;
-      if (currentWeight + item.weight > pallet.maxWeight + EPS) continue;
-
-      const pair = getSingleSkuPair(item);
+      const pair = getZoneSingleSkuPair(zone, item);
       if (!pair) continue;
 
       const chosenPat = parity === 'odd' ? pair.oddPattern : pair.evenPattern;
@@ -541,27 +634,31 @@ export function solvePalletPacking(
       if (fullCount === 0) continue;
 
       const isOnlySku = activeSkus.length === 1;
-      const fillsMostOfLayer = candidateSku.remaining >= Math.ceil(fullCount * 0.7);
-      if (!isOnlySku && !fillsMostOfLayer) continue;
+      // Require >= 80% of zone layer when other SKUs exist so we don't starve mixed fill rate
+      const fillsMostOfZone = candidateSku.remaining >= Math.ceil(fullCount * 0.8);
+      if (!isOnlySku && !fillsMostOfZone) continue;
 
-      // How many boxes can we place on this layer given remaining qty & weight limit?
       const maxByWeight = Math.floor(
         (pallet.maxWeight - currentWeight + EPS) / item.weight
       );
       const targetCount = Math.min(candidateSku.remaining, fullCount, maxByWeight);
       if (targetCount <= 0) continue;
 
-      const chosen2D = selectBalancedSubset(chosenPat.boxes, targetCount, pallet);
+      const chosen2D = selectBalancedSubset(
+        chosenPat.boxes,
+        targetCount,
+        zone.dx,
+        zone.dy
+      );
 
-      // Validate each box against support ratio and cumulative load-bearing limit
       const validBoxesForLayer: PlacedBox[] = [];
       for (const b2d of chosen2D) {
         const cand: PlacedBox = {
           instanceId: nextId(),
           cargoId: item.id,
           name: item.name,
-          x: b2d.x,
-          y: b2d.y,
+          x: round4(zone.x + b2d.x),
+          y: round4(zone.y + b2d.y),
           z: currentZ,
           dx: b2d.dx,
           dy: b2d.dy,
@@ -570,9 +667,12 @@ export function solvePalletPacking(
           weight: item.weight,
           maxLoad: item.maxLoad,
           color: item.color,
-          layerIndex,
+          layerIndex: isFullPallet ? zs.layerIndex : globalLayerCounter,
           layerParity: parity,
-          layerPattern: chosenPat.name,
+          layerPattern: isFullPallet
+            ? chosenPat.name
+            : `[${zone.label}] ${chosenPat.name}`,
+          zoneLabel: zone.label,
           sequence: 0,
           supportRatio: 1,
           supportingBoxIds: [],
@@ -582,6 +682,20 @@ export function solvePalletPacking(
         };
 
         if (!isWithinPallet(cand, pallet)) continue;
+
+        // Check 3D collision against existing boxes
+        let collides3D = false;
+        for (const other of placedBoxes) {
+          if (other.z + other.dz <= currentZ + EPS || currentZ + cand.dz <= other.z + EPS) {
+            continue;
+          }
+          if (rectsOverlapWithGap(cand, other, config.gapCm)) {
+            collides3D = true;
+            break;
+          }
+        }
+        if (collides3D) continue;
+
         const sup = evaluateSupport(cand, placedBoxes);
         if (sup.supportRatio + EPS < config.minSupportRatio) continue;
 
@@ -599,17 +713,21 @@ export function solvePalletPacking(
       if (validBoxesForLayer.length > 0) {
         builtLayerBoxes = validBoxesForLayer;
         builtLayerHeight = item.height;
-        builtPatternName = chosenPat.name;
+        builtPatternName = isFullPallet
+          ? chosenPat.name
+          : `[${zone.label}] ${chosenPat.name}`;
         candidateSku.remaining -= validBoxesForLayer.length;
         break;
       }
     }
 
-    // Fallback to Mixed (Heterogeneous) Layer Packer if single-SKU layer didn't apply
+    // Fallback to Mixed Zone Layer Packer
     if (builtLayerBoxes.length === 0) {
-      const mixed = packMixedLayer(
+      const mixed = packMixedZoneLayer(
+        zone,
+        isFullPallet,
         currentZ,
-        layerIndex,
+        isFullPallet ? zs.layerIndex : globalLayerCounter,
         parity,
         remainingSkus,
         placedBoxes,
@@ -623,18 +741,21 @@ export function solvePalletPacking(
       builtPatternName = mixed.patternName;
     }
 
-    if (builtLayerBoxes.length === 0) break;
+    zs.triedZ.add(currentZ);
+    if (builtLayerBoxes.length === 0) {
+      continue;
+    }
 
     placedBoxes.push(...builtLayerBoxes);
     const layerWeight = builtLayerBoxes.reduce((s, b) => s + b.weight, 0);
     currentWeight += layerWeight;
 
-    // Recompute loads & support after committing this layer
     propagateLoadsAndSupport(placedBoxes);
 
     const interlockedInLayer = builtLayerBoxes.filter((b) => b.isInterlocked).length;
+    const assignedLayerIdx = isFullPallet ? zs.layerIndex : globalLayerCounter;
     layers.push({
-      layerIndex,
+      layerIndex: assignedLayerIdx,
       parity,
       zStart: round4(currentZ),
       zHeight: round4(builtLayerHeight),
@@ -643,24 +764,24 @@ export function solvePalletPacking(
       layerWeight: round4(layerWeight),
       interlockedCount: interlockedInLayer,
       interlockRate:
-        layerIndex === 1
+        currentZ <= Z_CONTACT_TOLERANCE
           ? 1
           : builtLayerBoxes.length > 0
             ? interlockedInLayer / builtLayerBoxes.length
             : 0,
     });
 
-    currentZ = round4(currentZ + builtLayerHeight);
-    layerIndex++;
-
-    if (currentZ >= pallet.maxHeight - EPS) break;
+    // Register every distinct top elevation created by boxes in this layer
+    for (const b of builtLayerBoxes) {
+      addZLevel(zs, b.z + b.dz);
+    }
+    zs.layerIndex++;
+    globalLayerCounter++;
   }
 
-  // Final physics pass & collision-free stacking sequence assignment
   propagateLoadsAndSupport(placedBoxes);
   const sequencedBoxes = assignStackingSequence(placedBoxes);
 
-  // Determine reasons for any unplaced items
   const unplacedItems: UnplacedItem[] = [];
   for (const entry of remainingSkus) {
     if (entry.remaining <= 0) continue;
@@ -673,7 +794,7 @@ export function solvePalletPacking(
       )
     ) {
       reason = '單箱尺寸超出棧板長寬（零超邊限制）';
-    } else if (currentZ + it.height > pallet.maxHeight + EPS) {
+    } else if (it.height > pallet.maxHeight + EPS) {
       reason = '超出棧板最大允許堆疊高度';
     } else if (currentWeight + it.weight > pallet.maxWeight + EPS) {
       reason = '超出棧板最大允許承重上限';
@@ -700,7 +821,123 @@ export function solvePalletPacking(
     unplacedItems,
     layers,
     metrics,
+    zoneLayoutName: layout.name,
+    zones: layout.zones,
   };
+}
+
+/**
+ * Main 3D Palletizing Solver with Modular Zone Partitioning (1/1, 1/2, 1/4).
+ */
+export function solvePalletPacking(
+  pallet: PalletSpec,
+  items: CargoItem[],
+  config: PackingConfig
+): PackingResult {
+  const layouts = buildZoneLayouts(pallet, config.gapCm);
+  const activeCount = items.filter((it) => it.quantity > 0).length;
+
+  const scoreResult = (res: PackingResult, layout: ZoneLayoutSpec): number => {
+    const effUtil = Math.max(
+      res.metrics.totalVolumeUtilization,
+      res.metrics.weightUtilization
+    );
+    const placedRatio =
+      res.metrics.totalBoxesRequested > 0
+        ? res.metrics.totalBoxesPlaced / res.metrics.totalBoxesRequested
+        : 0;
+    const interlockWeight =
+      config.optimizationPriority === 'fill-rate'
+        ? 4
+        : config.optimizationPriority === 'interlock'
+          ? 16
+          : 9;
+    return (
+      effUtil * 100 +
+      placedRatio * 25 +
+      res.metrics.interlockRate * interlockWeight +
+      (res.metrics.cogOffset.isBalanced ? 3 : 0) -
+      layout.complexityPenalty
+    );
+  };
+
+  if (config.zoneMode === 'full') {
+    return solvePalletWithZoneLayout(pallet, items, config, layouts.full);
+  }
+
+  if (config.zoneMode === 'half') {
+    const cands = [layouts['half-y'], layouts['half-x']];
+    let bestRes = solvePalletWithZoneLayout(pallet, items, config, cands[0]);
+    let bestScore = scoreResult(bestRes, cands[0]);
+    for (let i = 1; i < cands.length; i++) {
+      const r = solvePalletWithZoneLayout(pallet, items, config, cands[i]);
+      const sc = scoreResult(r, cands[i]);
+      if (sc > bestScore) {
+        bestScore = sc;
+        bestRes = r;
+      }
+    }
+    return bestRes;
+  }
+
+  if (config.zoneMode === 'quarter') {
+    const qRes = solvePalletWithZoneLayout(pallet, items, config, layouts.quarter);
+    // If pure 4x1/4 couldn't place some oversized boxes, also check hybrid 1/2+2x1/4
+    if (qRes.unplacedItems.length > 0) {
+      const hybRes = solvePalletWithZoneLayout(
+        pallet,
+        items,
+        config,
+        layouts['hybrid-y']
+      );
+      if (
+        scoreResult(hybRes, layouts['hybrid-y']) >
+        scoreResult(qRes, layouts.quarter)
+      ) {
+        return hybRes;
+      }
+    }
+    return qRes;
+  }
+
+  // zoneMode === 'auto':
+  // 1. Evaluate 1/1 Full Layer first
+  const fullRes = solvePalletWithZoneLayout(pallet, items, config, layouts.full);
+  const fullEffUtil = Math.max(
+    fullRes.metrics.totalVolumeUtilization,
+    fullRes.metrics.weightUtilization
+  );
+
+  // Fast path: single SKU or already >= 78% full or placed 100% of items cleanly
+  if (
+    activeCount <= 1 ||
+    fullEffUtil >= 0.78 ||
+    (fullRes.unplacedItems.length === 0 && fullRes.metrics.compactVolumeUtilization >= 0.65)
+  ) {
+    return fullRes;
+  }
+
+  // Otherwise evaluate modular 1/2, 1/2+1/4, and 4×1/4 layouts and pick best
+  const candidates: ZoneLayoutSpec[] = [
+    layouts['half-y'],
+    layouts['half-x'],
+    layouts['hybrid-y'],
+    layouts.quarter,
+  ];
+
+  let bestRes = fullRes;
+  let bestScore = scoreResult(fullRes, layouts.full);
+
+  for (const layout of candidates) {
+    const res = solvePalletWithZoneLayout(pallet, items, config, layout);
+    const sc = scoreResult(res, layout);
+    if (sc > bestScore) {
+      bestScore = sc;
+      bestRes = res;
+    }
+  }
+
+  return bestRes;
 }
 
 function buildPalletSignature(result: PackingResult): string {
@@ -715,7 +952,7 @@ function buildPalletSignature(result: PackingResult): string {
   const layerPart = result.layers
     .map((l) => `${l.layerIndex}:${l.boxCount}:${l.patternName}`)
     .join(';');
-  return `${skuPart}#${layerPart}`;
+  return `${result.zoneLayoutName ?? 'full'}#${skuPart}#${layerPart}`;
 }
 
 function buildSkuSummary(result: PackingResult): string {
@@ -733,8 +970,7 @@ function buildSkuSummary(result: PackingResult): string {
 /**
  * Multi-Pallet Auto-Splitting Solver.
  * Automatically splits large delivery orders across multiple pallets while preserving
- * odd/even interlocking, load-bearing safety, and CoG balance on every pallet.
- * Uses identical-pallet fast-cloning so 1,900+ boxes solve in milliseconds.
+ * odd/even interlocking, modular zone partitioning, load-bearing safety, and CoG balance.
  */
 export function solveMultiPalletPacking(
   pallet: PalletSpec,
@@ -791,13 +1027,11 @@ export function solveMultiPalletPacking(
       }
     }
 
-    // Count how many boxes of each SKU were consumed by this pallet
     const usedBySku = new Map<string, number>();
     for (const b of single.placedBoxes) {
       usedBySku.set(b.cargoId, (usedBySku.get(b.cargoId) ?? 0) + 1);
     }
 
-    // Determine how many identical pallets can be stamped out immediately
     let maxRepeats = Infinity;
     for (const [skuId, used] of usedBySku.entries()) {
       const rem = remainingMap.get(skuId) ?? 0;
@@ -808,7 +1042,6 @@ export function solveMultiPalletPacking(
       Math.min(maxRepeats, maxPallets - pallets.length)
     );
 
-    // Clean per-pallet result (no false "unplaced" warning inside an individual pallet)
     const cleanPalletResult: PackingResult = {
       ...single,
       unplacedItems: [],
@@ -822,14 +1055,12 @@ export function solveMultiPalletPacking(
       pallets.push(cleanPalletResult);
     }
 
-    // Deduct consumed quantities
     for (const [skuId, used] of usedBySku.entries()) {
       const rem = remainingMap.get(skuId) ?? 0;
       remainingMap.set(skuId, Math.max(0, rem - used * repeats));
     }
   }
 
-  // Group identical pallet layouts into template groups for easy warehouse operation
   const groupMap = new Map<string, PalletTemplateGroup>();
   const groups: PalletTemplateGroup[] = [];
 
@@ -857,7 +1088,6 @@ export function solveMultiPalletPacking(
     }
   });
 
-  // Collect any genuinely unplaceable items or items held back due to low utilization
   const unplacedItems: UnplacedItem[] = [];
   const hitLimit = pallets.length >= maxPallets;
   for (const it of validItems) {
@@ -932,4 +1162,3 @@ export function solveMultiPalletPacking(
     },
   };
 }
-

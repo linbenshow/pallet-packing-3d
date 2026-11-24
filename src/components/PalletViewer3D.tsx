@@ -320,6 +320,30 @@ export const PalletViewer3D: React.FC<PalletViewer3DProps> = ({
       group.add(envWire);
     }
 
+    // 2b. Modular Zone Divider Outlines on pallet deck (for 1/2 and 1/4 zone layouts)
+    if (result.zones && result.zones.length > 1) {
+      for (const zRect of result.zones) {
+        const zGeo = new THREE.PlaneGeometry(zRect.dx, zRect.dy);
+        const zEdges = new THREE.EdgesGeometry(zGeo);
+        zGeo.dispose();
+        const zLine = new THREE.LineSegments(
+          zEdges,
+          new THREE.LineBasicMaterial({
+            color: 0x38bdf8,
+            transparent: true,
+            opacity: 0.72,
+          })
+        );
+        zLine.rotation.x = -Math.PI / 2;
+        zLine.position.set(
+          zRect.x + zRect.dx / 2 - L / 2,
+          H + 0.25,
+          zRect.y + zRect.dy / 2 - W / 2
+        );
+        group.add(zLine);
+      }
+    }
+
     // 3. Render cargo boxes
     const visibleBoxes = result.placedBoxes.filter((b) => {
       if (b.sequence > visibleUpToSeq) return false;
@@ -472,6 +496,12 @@ export const PalletViewer3D: React.FC<PalletViewer3DProps> = ({
             </span>
           </div>
           <div className="tooltip-grid">
+            {hoveredBox.zoneLabel && (
+              <>
+                <span>所屬分區</span>
+                <span>{hoveredBox.zoneLabel}</span>
+              </>
+            )}
             <span>座標 (cm)</span>
             <span>
               X:{hoveredBox.x.toFixed(1)} · Y:{hoveredBox.y.toFixed(1)} · Z:{hoveredBox.z.toFixed(1)}

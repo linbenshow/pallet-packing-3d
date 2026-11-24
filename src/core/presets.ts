@@ -49,6 +49,8 @@ export const DEFAULT_CONFIG: PackingConfig = {
   groupSameSku: true,
   enableMinUtilization: false,
   minUtilizationRatio: 0.5,
+  zoneMode: 'auto',
+  optimizationPriority: 'balanced',
 };
 
 export interface ScenarioPreset {

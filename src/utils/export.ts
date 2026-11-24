@@ -41,6 +41,7 @@ export function exportMultiPalletToCSV(
   const headers = [
     '棧板編號',
     '放置順序',
+    '所屬分區',
     '層數',
     '奇偶層',
     '層排法',
@@ -66,6 +67,7 @@ export function exportMultiPalletToCSV(
       rows.push([
         palletNo,
         b.sequence,
+        `"${b.zoneLabel ?? '1/1 整層'}"`,
         b.layerIndex,
         b.layerParity === 'odd' ? '奇數層' : '偶數層',
         `"${b.layerPattern}"`,

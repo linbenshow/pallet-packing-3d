@@ -32,9 +32,11 @@ import { solveMultiPalletPacking } from './core/solver';
 import type {
   CargoItem,
   InterlockStrategy,
+  OptimizationPriority,
   PackingConfig,
   PackingResult,
   PalletSpec,
+  ZoneMode,
 } from './core/types';
 import {
   exportMultiPalletToCSV,
@@ -358,6 +360,42 @@ export function App() {
             <div className="card-title">
               <Sliders size={15} /> 堆疊與穩定性參數
             </div>
+
+            <label className="field" style={{ marginBottom: 8 }}>
+              <span>層空間分區模式 (1/1 · 1/2 · 1/4)</span>
+              <select
+                className="select-input"
+                style={{ marginBottom: 0 }}
+                value={config.zoneMode}
+                onChange={(e) =>
+                  setConfig({ ...config, zoneMode: e.target.value as ZoneMode })
+                }
+              >
+                <option value="auto">自動最佳分區（1/1 · 1/2 · 1/4 動態擇優）</option>
+                <option value="full">1/1 整層模式（全板統一）</option>
+                <option value="half">1/2 半層雙區（左右／前後獨立堆高）</option>
+                <option value="quarter">1/4 四分區（2×2 獨立堆高）</option>
+              </select>
+            </label>
+
+            <label className="field" style={{ marginBottom: 10 }}>
+              <span>填充率 vs 策略權衡偏好</span>
+              <select
+                className="select-input"
+                style={{ marginBottom: 0 }}
+                value={config.optimizationPriority}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    optimizationPriority: e.target.value as OptimizationPriority,
+                  })
+                }
+              >
+                <option value="balanced">均衡模式（預設，互鎖最多折讓 5% 箱數）</option>
+                <option value="fill-rate">填充率優先（絕不犧牲單層箱數）</option>
+                <option value="interlock">互鎖穩定優先（最高容許折讓 15%）</option>
+              </select>
+            </label>
 
             <div className="toggle-row">
               <label className="checkbox-label">
@@ -911,6 +949,10 @@ export function App() {
             </div>
 
             <div className="status-list">
+              <div className="status-row">
+                <span>採用空間分區</span>
+                <span className="badge info">{result.zoneLayoutName ?? '1/1 整層'}</span>
+              </div>
               <div className="status-row">
                 <span>零超邊界 (Zero Overhang)</span>
                 <span className={`badge ${metrics.isOverhangFree ? 'ok' : 'err'}`}>
